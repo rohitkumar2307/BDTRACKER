@@ -1458,7 +1458,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Show login after a brief delay to let Firebase load initial data
     setTimeout(showLoginScreen, 400);
   });
-
+   
   // Hide loading screen
   setTimeout(() => {
     document.getElementById('loading-screen').classList.add('hidden');
