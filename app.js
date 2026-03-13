@@ -15,6 +15,348 @@ const FIREBASE_CONFIG = {
   measurementId: "G-FLJ6VFR5EZ"
 };
 
+// ─── AUTH STATE ─────────────────────────────────────────────────────
+const AUTH = { role: null, userId: null, username: null }; // role: 'admin' | 'player'
+
+// Superadmin fallback (always works even if Firebase admins node is empty)
+const SUPER_ADMIN = { username: 'admin', passwordHash: null }; // hash set on first use
+const SUPER_ADMIN_DEFAULT_PWD = 'Ballandor@2026'; // changeable via Firebase
+
+// SHA-256 via Web Crypto API
+async function sha256(str) {
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str));
+  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,'0')).join('');
+}
+
+// ── Login tab switcher ──
+function switchLoginTab(tab) {
+  document.querySelectorAll('.login-tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.login-tab-content').forEach(t => t.classList.remove('active'));
+  document.getElementById(`tab-${tab}-btn`).classList.add('active');
+  document.getElementById(`login-${tab}-pane`).classList.add('active');
+  // populate player dropdown on vote tab
+  if (tab === 'vote') populatePlayerLoginSelect();
+}
+
+function populatePlayerLoginSelect() {
+  const sel = document.getElementById('player-login-select');
+  const players = getPlayersArray();
+  sel.innerHTML = '<option value="">— Choose your name —</option>' +
+    players.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('');
+}
+
+function togglePasswordVisibility() {
+  const inp = document.getElementById('login-password');
+  inp.type = inp.type === 'password' ? 'text' : 'password';
+}
+
+// ── Admin Login ──
+async function doAdminLogin() {
+  const username = document.getElementById('login-username').value.trim();
+  const password = document.getElementById('login-password').value;
+  const errEl = document.getElementById('login-error');
+  const btn = document.getElementById('admin-login-btn');
+
+  if (!username || !password) {
+    errEl.textContent = 'Enter both username and password'; errEl.style.display = 'block'; return;
+  }
+  errEl.style.display = 'none';
+  btn.innerHTML = '<span class="spin"></span> Checking…'; btn.disabled = true;
+
+  const hash = await sha256(password);
+  let success = false;
+
+  // Check Firebase admins node first
+  if (window._fb) {
+    const { ref, get, db } = window._fb;
+    try {
+      const snap = await get(ref(db, `ballandor/admins/${btoa(username)}`));
+      if (snap.exists() && snap.val().hash === hash) success = true;
+    } catch(e) {}
+  }
+
+  // Fallback: check superadmin (stored hash or default password)
+  if (!success) {
+    const defaultHash = await sha256(SUPER_ADMIN_DEFAULT_PWD);
+    // Also check if there's a stored superadmin hash in Firebase
+    let storedSuperHash = null;
+    if (window._fb) {
+      try {
+        const { ref, get, db } = window._fb;
+        const snap = await get(ref(db, 'ballandor/superAdmin'));
+        if (snap.exists()) storedSuperHash = snap.val().hash;
+      } catch(e) {}
+    }
+    const superHash = storedSuperHash || defaultHash;
+    if (username === 'admin' && hash === superHash) success = true;
+  }
+
+  btn.innerHTML = '🔑 Login as Admin'; btn.disabled = false;
+
+  if (success) {
+    AUTH.role = 'admin'; AUTH.username = username;
+    sessionStorage.setItem('ballandor_auth', JSON.stringify(AUTH));
+    document.getElementById('login-overlay').classList.add('hidden');
+    showAdminUI();
+  } else {
+    errEl.textContent = '❌ Incorrect username or password'; errEl.style.display = 'block';
+    document.getElementById('login-password').value = '';
+  }
+}
+
+// ── Player Login ──
+function doPlayerLogin() {
+  const playerId = document.getElementById('player-login-select').value;
+  const errEl = document.getElementById('vote-login-error');
+  if (!playerId) { errEl.textContent = 'Please select your name'; errEl.style.display = 'block'; return; }
+  errEl.style.display = 'none';
+  AUTH.role = 'player'; AUTH.userId = playerId;
+  AUTH.username = STATE.players[playerId]?.name || 'Player';
+  sessionStorage.setItem('ballandor_auth', JSON.stringify(AUTH));
+  document.getElementById('login-overlay').classList.add('hidden');
+  showPlayerVoteUI();
+}
+
+// ── Logout ──
+function doLogout() {
+  AUTH.role = null; AUTH.userId = null; AUTH.username = null;
+  sessionStorage.removeItem('ballandor_auth');
+  document.getElementById('player-vote-overlay').style.display = 'none';
+  document.getElementById('login-overlay').classList.remove('hidden');
+  populatePlayerLoginSelect();
+  // Reset login fields
+  document.getElementById('login-username').value = '';
+  document.getElementById('login-password').value = '';
+  document.getElementById('login-error').style.display = 'none';
+  document.getElementById('vote-login-error').style.display = 'none';
+}
+
+// ── Show login screen ──
+function showLoginScreen() {
+  // Check session storage for existing auth
+  try {
+    const saved = sessionStorage.getItem('ballandor_auth');
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      if (parsed.role === 'admin' && parsed.username) {
+        Object.assign(AUTH, parsed);
+        document.getElementById('login-overlay').classList.add('hidden');
+        showAdminUI(); return;
+      }
+      if (parsed.role === 'player' && parsed.userId && STATE.players[parsed.userId]) {
+        Object.assign(AUTH, parsed);
+        document.getElementById('login-overlay').classList.add('hidden');
+        showPlayerVoteUI(); return;
+      }
+    }
+  } catch(e) {}
+  populatePlayerLoginSelect();
+  // login overlay is visible by default
+}
+
+// ── Show admin UI ──
+function showAdminUI() {
+  document.body.classList.remove('role-player');
+  document.getElementById('player-vote-overlay').style.display = 'none';
+  document.getElementById('header-vote-btn').style.display = 'none';
+  // Show header admin badge
+  const badge = document.getElementById('admin-header-badge');
+  if (badge) badge.innerHTML = `<div class="admin-badge">🔐 ${esc(AUTH.username)}</div>`;
+  renderAll();
+}
+
+// ── Show player vote UI ──
+function showPlayerVoteUI() {
+  const player = STATE.players[AUTH.userId];
+  if (!player) { doLogout(); return; }
+  document.body.classList.add('role-player');
+  
+  // They start by seeing the dashboard, but we enable the "Cast My Ballot" button
+  document.getElementById('header-vote-btn').style.display = 'block';
+  const badge = document.getElementById('admin-header-badge');
+  if (badge) badge.innerHTML = `<div class="admin-badge" style="border-color:rgba(255,255,255,0.2);color:var(--text-primary);"><span style="color:var(--gold);">👤</span> ${esc(player.name)}</div>`;
+  
+  // Show dashboard
+  document.getElementById('player-vote-overlay').style.display = 'none';
+  renderAll();
+}
+
+// ── Trigger full-screen player ballot ──
+function openPlayerBallotModal() {
+  const player = STATE.players[AUTH.userId];
+  if (!player) return;
+  document.getElementById('pv-player-name').textContent = player.name;
+  document.getElementById('pv-avatar').textContent = player.name.charAt(0).toUpperCase();
+  // Update player's firebase connection status mirrors
+  const pvDot = document.getElementById('pv-firebase-dot');
+  const pvTxt = document.getElementById('pv-firebase-text');
+  const mainDot = document.getElementById('firebase-dot');
+  if (pvDot && mainDot) pvDot.className = mainDot.className;
+  if (pvTxt) pvTxt.textContent = document.getElementById('firebase-status-text')?.textContent || 'Online';
+
+  document.getElementById('player-vote-overlay').style.display = 'grid';
+  renderPlayerBallot();
+}
+
+// ── Render player ballot ──
+function renderPlayerBallot() {
+  const playerId = AUTH.userId;
+  const voter = STATE.voters?.[playerId];
+  const hasVotes = voter && Object.values(voter.votes || {}).some(v => v);
+
+  const alreadyEl = document.getElementById('pv-already-voted');
+  const ballotEl  = document.getElementById('pv-ballot');
+
+  if (hasVotes) {
+    alreadyEl.style.display = 'block';
+    ballotEl.style.display  = 'none';
+  } else {
+    alreadyEl.style.display = 'none';
+    ballotEl.style.display  = 'block';
+  }
+  renderBallotSlots(voter);
+}
+
+function showVoteBallot() {
+  document.getElementById('pv-already-voted').style.display = 'none';
+  document.getElementById('pv-ballot').style.display = 'block';
+  renderBallotSlots(STATE.voters?.[AUTH.userId]);
+}
+
+function renderBallotSlots(voter) {
+  const playerId = AUTH.userId;
+  const rankLabels = ['🥇','🥈','🥉','4th','5th','6th','7th'];
+  const rankPts = [200,170,150,120,100,90,80];
+  const rankClasses = ['rank-1','rank-2','rank-3','','','',''];
+  const otherPlayers = getPlayersArray().filter(p => p.id !== playerId);
+
+  document.getElementById('pv-vote-slots').innerHTML = [1,2,3,4,5,6,7].map(rank => {
+    const pts = rankPts[rank-1];
+    const label = rankLabels[rank-1];
+    const cls = rankClasses[rank-1];
+    const curVal = voter?.votes?.[rank] || '';
+    return `<div class="pv-slot ${cls}">
+      <span class="pv-rank-label ${rank<=3?`vote-rank-${rank}`:'vote-rank-other'}">${label}</span>
+      <select class="pv-slot-select" id="pvslot-${rank}" onchange="pvUpdateVote(${rank}, this.value)">
+        <option value="">— None —</option>
+        ${otherPlayers.map(p => `<option value="${p.id}"${p.id===curVal?' selected':''}>${esc(p.name)}</option>`).join('')}
+      </select>
+      <span class="pv-rank-pts">${pts} pts</span>
+    </div>`;
+  }).join('');
+}
+
+function pvUpdateVote(rank, playerId) {
+  // Prevent duplicate picks across ranks
+  if (playerId) {
+    for (let r = 1; r <= 7; r++) {
+      if (r === rank) continue;
+      const sel = document.getElementById(`pvslot-${r}`);
+      if (sel && sel.value === playerId) {
+        showNotif(`${STATE.players[playerId]?.name} already picked at rank ${r}`, 'error');
+        document.getElementById(`pvslot-${rank}`).value = '';
+        return;
+      }
+    }
+  }
+}
+
+async function submitPlayerVote() {
+  const pid = AUTH.userId;
+  if (!pid) return;
+  const votes = {};
+  const usedIds = new Set();
+  for (let r = 1; r <= 7; r++) {
+    const val = document.getElementById(`pvslot-${r}`)?.value;
+    if (!val) continue;
+    if (usedIds.has(val)) { showNotif('Duplicate pick detected!', 'error'); return; }
+    usedIds.add(val); votes[r] = val;
+  }
+  if (!Object.keys(votes).length) { showNotif('Pick at least one player!', 'error'); return; }
+
+  // Ensure voter entry exists in STATE.voters
+  if (!STATE.voters) STATE.voters = {};
+  if (!STATE.voters[pid]) {
+    STATE.voters[pid] = { id: pid, name: STATE.players[pid]?.name || 'Player', votes: {} };
+  }
+  STATE.voters[pid].votes = votes;
+
+  const btn = document.getElementById('pv-submit-btn');
+  btn.innerHTML = '<span class="spin"></span> Saving…'; btn.disabled = true;
+  await saveToFirebase(`ballandor/voters/${pid}`, STATE.voters[pid]);
+  btn.innerHTML = '✅ Submit My Vote'; btn.disabled = false;
+
+  showNotif('🗳️ Vote submitted! Thank you!', 'success');
+  // Show confirmation
+  document.getElementById('pv-ballot').style.display = 'none';
+  document.getElementById('pv-already-voted').style.display = 'block';
+}
+
+// ── Admin Management ──
+async function addAdmin() {
+  const username = document.getElementById('new-admin-username').value.trim();
+  const password = document.getElementById('new-admin-password').value;
+  if (!username || !password) return showNotif('Both fields required', 'error');
+  if (password.length < 6)    return showNotif('Password must be ≥ 6 characters', 'error');
+  const hash = await sha256(password);
+  if (!window._fb) return showNotif('Firebase not connected', 'error');
+  const { ref, set, db } = window._fb;
+  await set(ref(db, `ballandor/admins/${btoa(username)}`), { username, hash });
+  document.getElementById('new-admin-username').value = '';
+  document.getElementById('new-admin-password').value = '';
+  showNotif(`✅ Admin "${username}" added!`, 'success');
+  loadAdminList();
+}
+
+async function changeMyPassword() {
+  const newPwd = document.getElementById('change-pwd-input').value;
+  if (!newPwd || newPwd.length < 6) return showNotif('Password must be ≥ 6 characters', 'error');
+  const hash = await sha256(newPwd);
+  if (!window._fb) return showNotif('Firebase not connected', 'error');
+  const { ref, set, db } = window._fb;
+  if (AUTH.username === 'admin') {
+    await set(ref(db, 'ballandor/superAdmin'), { hash });
+  } else {
+    await set(ref(db, `ballandor/admins/${btoa(AUTH.username)}`), { username: AUTH.username, hash });
+  }
+  document.getElementById('change-pwd-input').value = '';
+  showNotif('✅ Password updated!', 'success');
+}
+
+async function removeAdmin(username) {
+  if (!confirm(`Remove admin "${username}"?`)) return;
+  if (username === AUTH.username) return showNotif("Can't remove yourself", 'error');
+  if (!window._fb) return;
+  const { ref, remove, db } = window._fb;
+  await remove(ref(db, `ballandor/admins/${btoa(username)}`));
+  showNotif(`Removed admin "${username}"`, 'info');
+  loadAdminList();
+}
+
+async function loadAdminList() {
+  const listEl = document.getElementById('admin-list');
+  if (!listEl) return;
+  if (!window._fb) { listEl.innerHTML = '<div style="color:var(--text-secondary);font-size:13px;">Firebase not connected</div>'; return; }
+  const { ref, get, db } = window._fb;
+  try {
+    const snap = await get(ref(db, 'ballandor/admins'));
+    const admins = snap.val() ? Object.values(snap.val()) : [];
+    // Always show superadmin
+    const all = [{ username: 'admin', isSuperAdmin: true }, ...admins];
+    listEl.innerHTML = `
+      <div style="font-family:'Cinzel',serif;font-size:13px;color:var(--gold);margin-bottom:10px;">Current Admins</div>
+      ${all.map(a => `
+        <div style="display:flex;align-items:center;gap:10px;padding:8px 12px;background:rgba(255,255,255,0.03);border-radius:8px;margin-bottom:6px;">
+          <span style="font-size:18px;">${a.isSuperAdmin ? '👑' : '🔐'}</span>
+          <span style="flex:1;font-weight:500;">${esc(a.username)}</span>
+          <span style="font-size:11px;color:var(--text-secondary);">${a.isSuperAdmin ? 'Superadmin' : 'Admin'}</span>
+          ${!a.isSuperAdmin ? `<button class="btn btn-danger btn-sm" style="padding:4px 8px;font-size:11px;" onclick="removeAdmin('${a.username}')">✕</button>` : ''}
+        </div>
+      `).join('')}
+    `;
+  } catch(e) { listEl.innerHTML = '<div style="color:var(--text-secondary);font-size:13px;">Could not load admins</div>'; }
+}
+
 // ─── TOURNAMENT CONFIG ───────────────────────────────────────────────
 const TOURNAMENTS = [
   {
@@ -213,8 +555,9 @@ async function saveToFirebase(path, value) {
 }
 
 // ─── PLAYER MANAGEMENT ───────────────────────────────────────────────
-function addPlayer(name) {
+function addPlayer(name, team = "") {
   name = name.trim();
+  team = team.trim() || "Free Agent";
   if (!name) return showNotif('Enter a player name', 'error');
   const count = Object.keys(STATE.players).length;
   if (count >= 36) return showNotif('Maximum 36 players allowed', 'error');
@@ -223,7 +566,7 @@ function addPlayer(name) {
     return showNotif(`"${name}" is already registered`, 'error');
   }
   const id = 'p_' + Date.now() + '_' + Math.random().toString(36).slice(2,6);
-  STATE.players[id] = { id, name };
+  STATE.players[id] = { id, name, team };
   saveToFirebase('ballandor/players', STATE.players);
   showNotif(`✅ ${name} added!`, 'success');
 }
@@ -390,7 +733,7 @@ function renderDashboard() {
   // Leaderboard
   const body = document.getElementById('leaderboard-body');
   if (!ranked.length) {
-    body.innerHTML = `<tr><td colspan="6"><div class="empty-state"><div class="empty-icon">⚽</div><div class="empty-title">No data yet</div><div class="empty-desc">Add players and register tournament results</div></div></td></tr>`;
+    body.innerHTML = `<tr><td colspan="7"><div class="empty-state"><div class="empty-icon">⚽</div><div class="empty-title">No data yet</div><div class="empty-desc">Add players and register tournament results</div></div></td></tr>`;
     return;
   }
   body.innerHTML = ranked.map((p, i) => {
@@ -398,6 +741,7 @@ function renderDashboard() {
     return `<tr>
       <td><span class="rank-badge ${rankClass}">${i+1}</span></td>
       <td class="player-name-cell">${esc(p.name)}</td>
+      <td style="color:var(--text-secondary);font-size:12px;">${esc(p.team || 'Free Agent')}</td>
       <td class="points-cell">${p.tournamentPts}</td>
       <td class="points-cell">${p.sessionPts}</td>
       <td class="points-cell">${p.votingPts}</td>
@@ -421,7 +765,10 @@ function renderPlayers() {
   grid.innerHTML = filtered.map(p => `
     <div class="player-chip" id="chip-${p.id}">
       <div class="player-avatar">${p.name.charAt(0).toUpperCase()}</div>
-      <span class="player-chip-name">${esc(p.name)}</span>
+      <div style="flex:1;">
+        <div class="player-chip-name">${esc(p.name)}</div>
+        <div style="font-size:11px;color:var(--text-secondary);margin-top:2px;">🛡️ ${esc(p.team)}</div>
+      </div>
       <button class="player-delete" onclick="removePlayer('${p.id}')" title="Remove">✕</button>
     </div>
   `).join('');
@@ -966,12 +1313,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Add player
   document.getElementById('add-player-btn').addEventListener('click', () => {
+    if (AUTH.role !== 'admin') return;
     document.getElementById('new-player-name').value = '';
+    document.getElementById('new-player-team').value = '';
     openModal('add-player-modal');
     setTimeout(() => document.getElementById('new-player-name').focus(), 200);
   });
   document.getElementById('confirm-add-player').addEventListener('click', () => {
-    addPlayer(document.getElementById('new-player-name').value);
+    addPlayer(document.getElementById('new-player-name').value, document.getElementById('new-player-team').value);
     if (!Object.values(STATE.players).some(p => p.name.toLowerCase() === document.getElementById('new-player-name').value.trim().toLowerCase())) return;
     closeModal('add-player-modal');
     renderAll();
@@ -982,13 +1331,20 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Bulk add
   document.getElementById('bulk-add-btn').addEventListener('click', () => {
+    if (AUTH.role !== 'admin') return;
     const lines = document.getElementById('bulk-textarea').value.split('\n');
     let added = 0;
     lines.forEach(line => {
-      const name = line.trim();
+      let name = line.trim();
+      let team = "";
       if (!name) return;
+      if (name.includes('-')) {
+        const parts = name.split('-');
+        name = parts[0].trim();
+        team = parts.slice(1).join('-').trim();
+      }
       const before = Object.keys(STATE.players).length;
-      addPlayer(name);
+      addPlayer(name, team);
       if (Object.keys(STATE.players).length > before) added++;
     });
     document.getElementById('bulk-textarea').value = '';
@@ -1043,9 +1399,21 @@ document.addEventListener('DOMContentLoaded', () => {
     renderSession();
   });
 
-  // Config modal — shows current project info only (config is hardcoded)
+  // Config btn → open Admin Management modal (admins only)
   document.getElementById('config-btn').addEventListener('click', () => {
-    openModal('config-modal');
+    if (AUTH.role !== 'admin') return;
+    loadAdminList();
+    openModal('admin-mgmt-modal');
+  });
+
+  // Logout button in header
+  document.getElementById('logout-btn')?.addEventListener('click', doLogout);
+
+  // Enter key triggers admin login
+  ['login-username','login-password'].forEach(id => {
+    document.getElementById(id)?.addEventListener('keydown', e => {
+      if (e.key === 'Enter') doAdminLogin();
+    });
   });
   document.getElementById('save-config-btn').addEventListener('click', async () => {
     closeModal('config-modal');
@@ -1081,13 +1449,14 @@ document.addEventListener('DOMContentLoaded', () => {
   const now = new Date();
   document.getElementById('season-label').textContent = `Season ${now.getFullYear()}`;
 
-  // Auto-connect with hardcoded Firebase config
+  // Auto-connect with hardcoded Firebase config, then show login screen
   initFirebase(FIREBASE_CONFIG).then(ok => {
     if (!ok) {
       setFirebaseStatus('error', 'Offline — using local data');
       loadLocalFallback();
-      renderAll();
     }
+    // Show login after a brief delay to let Firebase load initial data
+    setTimeout(showLoginScreen, 400);
   });
 
   // Hide loading screen

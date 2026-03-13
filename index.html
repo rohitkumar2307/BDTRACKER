@@ -17,6 +17,141 @@
   <div class="loading-bar"><div class="loading-bar-fill"></div></div>
 </div>
 
+<!-- LOGIN OVERLAY -->
+<div id="login-overlay" class="login-overlay">
+  <div class="login-bg-pattern"></div>
+  <div class="login-card">
+    <div class="login-logo">
+      <div class="login-trophy">🏆</div>
+      <div class="login-brand">BALLANDOR</div>
+      <div class="login-sub">eFootball Tournament Manager</div>
+    </div>
+
+    <div class="login-tabs">
+      <button class="login-tab active" id="tab-admin-btn" onclick="switchLoginTab('admin')">🔐 Admin Login</button>
+      <button class="login-tab" id="tab-vote-btn" onclick="switchLoginTab('vote')">🗳️ Cast My Vote</button>
+    </div>
+
+    <!-- ADMIN TAB -->
+    <div class="login-tab-content active" id="login-admin-pane">
+      <div class="form-group">
+        <label class="form-label">Username</label>
+        <input class="form-input" id="login-username" placeholder="Enter admin username…" autocomplete="username" />
+      </div>
+      <div class="form-group">
+        <label class="form-label">Password</label>
+        <div style="position:relative;">
+          <input class="form-input" id="login-password" type="password" placeholder="Enter password…" autocomplete="current-password" />
+          <button class="pwd-toggle" id="pwd-toggle" onclick="togglePasswordVisibility()" title="Show/hide password">👁️</button>
+        </div>
+      </div>
+      <div id="login-error" class="login-error" style="display:none;"></div>
+      <button class="btn btn-primary" id="admin-login-btn" onclick="doAdminLogin()" style="width:100%;justify-content:center;margin-top:4px;">
+        🔑 Login as Admin
+      </button>
+    </div>
+
+    <!-- PLAYER VOTE TAB -->
+    <div class="login-tab-content" id="login-vote-pane">
+      <div class="form-group">
+        <label class="form-label">Select Your Name</label>
+        <select class="form-select" id="player-login-select" style="font-size:15px;padding:14px 16px;">
+          <option value="">— Choose your name —</option>
+        </select>
+        <div class="form-hint" style="margin-top:8px;">⚠️ Only registered players can cast votes. Ask your admin to add you first.</div>
+      </div>
+      <div id="vote-login-error" class="login-error" style="display:none;"></div>
+      <button class="btn btn-primary" id="player-vote-btn" onclick="doPlayerLogin()" style="width:100%;justify-content:center;margin-top:4px;">
+        🗳️ Go to My Ballot
+      </button>
+    </div>
+
+    <div class="login-footer">Season 2026 · All data synced via Firebase</div>
+  </div>
+</div>
+
+<!-- PLAYER VOTE OVERLAY (full-screen ballot for non-admin players) -->
+<div id="player-vote-overlay" class="player-vote-overlay" style="display:none;">
+  <div class="pv-header">
+    <div class="pv-logo">🏆 BALLANDOR <span style="font-size:13px;font-weight:400;color:var(--text-secondary);">Voting Ballot</span></div>
+    <div style="display:flex;align-items:center;gap:12px;">
+      <div class="firebase-badge" id="pv-firebase-badge">
+        <div class="firebase-dot" id="pv-firebase-dot"></div>
+        <span id="pv-firebase-text">Connecting…</span>
+      </div>
+      <button class="btn btn-secondary btn-sm" onclick="doLogout()">← Exit</button>
+    </div>
+  </div>
+  <div class="pv-body">
+    <div class="pv-welcome">
+      <div class="pv-avatar" id="pv-avatar">A</div>
+      <div>
+        <div class="pv-name" id="pv-player-name">Player</div>
+        <div class="pv-desc">Rank your top 7 players for the Ballandor award</div>
+      </div>
+    </div>
+
+    <div id="pv-already-voted" class="pv-voted-notice" style="display:none;">
+      <div style="font-size:32px;margin-bottom:8px;">✅</div>
+      <div style="font-family:'Cinzel',serif;font-size:18px;color:var(--gold);margin-bottom:6px;">Vote Submitted!</div>
+      <div style="font-size:13px;color:var(--text-secondary);">Your ballot has been recorded. You can update it anytime before the deadline.</div>
+      <button class="btn btn-secondary btn-sm" onclick="showVoteBallot()" style="margin-top:16px;">✏️ Edit My Votes</button>
+    </div>
+
+    <div id="pv-ballot" class="pv-ballot">
+      <div class="pv-rules-card">
+        <div style="font-family:'Cinzel',serif;font-size:13px;color:var(--gold);margin-bottom:8px;">📋 Voting Rules</div>
+        <div style="font-size:12px;color:var(--text-secondary);line-height:1.8;">
+          • Rank up to <strong style="color:var(--gold)">7 players</strong> from 1st to 7th<br>
+          • You <strong>cannot vote for yourself</strong><br>
+          • No duplicate picks<br>
+          • Points: 1st=200, 2nd=170, 3rd=150, 4th=120, 5th=100, 6th=90, 7th=80
+        </div>
+      </div>
+      <div class="pv-slots" id="pv-vote-slots"></div>
+      <button class="btn btn-primary" id="pv-submit-btn" onclick="submitPlayerVote()" style="width:100%;justify-content:center;margin-top:20px;padding:14px;">
+        ✅ Submit My Vote
+      </button>
+    </div>
+  </div>
+
+  <!-- Voting Points Reference -->
+  <div class="pv-pts-sidebar">
+    <div style="font-family:'Cinzel',serif;font-size:12px;color:var(--gold);margin-bottom:12px;letter-spacing:1px;">🏅 POINTS</div>
+    <div class="pv-pts-row"><span>🥇 1st</span><span>200</span></div>
+    <div class="pv-pts-row"><span>🥈 2nd</span><span>170</span></div>
+    <div class="pv-pts-row"><span>🥉 3rd</span><span>150</span></div>
+    <div class="pv-pts-row"><span>4th</span><span>120</span></div>
+    <div class="pv-pts-row"><span>5th</span><span>100</span></div>
+    <div class="pv-pts-row"><span>6th</span><span>90</span></div>
+    <div class="pv-pts-row"><span>7th</span><span>80</span></div>
+  </div>
+</div>
+
+<!-- ADMIN MANAGEMENT MODAL -->
+<div class="modal-overlay" id="admin-mgmt-modal">
+  <div class="modal" style="max-width:500px;">
+    <div class="modal-header">
+      <div class="modal-title">👥 Admin Management</div>
+      <button class="modal-close" data-close="admin-mgmt-modal">✕</button>
+    </div>
+    <div class="modal-body">
+      <div id="admin-list" style="margin-bottom:20px;"></div>
+      <hr style="border-color:var(--border-glass);margin-bottom:20px;">
+      <div style="font-family:'Cinzel',serif;font-size:13px;color:var(--gold);margin-bottom:14px;">➕ Add New Admin</div>
+      <div class="form-row">
+        <div class="form-group"><label class="form-label">Username</label><input class="form-input" id="new-admin-username" placeholder="Username…" /></div>
+        <div class="form-group"><label class="form-label">Password</label><input class="form-input" id="new-admin-password" type="password" placeholder="Password…" /></div>
+      </div>
+      <button class="btn btn-primary btn-sm" onclick="addAdmin()">➕ Add Admin</button>
+      <hr style="border-color:var(--border-glass);margin:20px 0;">
+      <div style="font-family:'Cinzel',serif;font-size:13px;color:var(--gold);margin-bottom:14px;">🔑 Change My Password</div>
+      <div class="form-group"><label class="form-label">New Password</label><input class="form-input" id="change-pwd-input" type="password" placeholder="New password…" /></div>
+      <button class="btn btn-secondary btn-sm" onclick="changeMyPassword()">🔑 Update Password</button>
+    </div>
+  </div>
+</div>
+
 <!-- NOTIFICATIONS -->
 <div class="notif-container" id="notif-container"></div>
 
@@ -36,12 +171,15 @@
       <button class="nav-btn" data-page="finals">🥇 Finals</button>
     </nav>
     <div class="header-actions">
+      <div id="admin-header-badge"></div>
+      <button class="btn btn-primary btn-sm" id="header-vote-btn" style="display:none;" onclick="showPlayerVoteUI()">🗳️ Cast Ballot</button>
       <div class="firebase-badge" id="firebase-badge">
         <div class="firebase-dot" id="firebase-dot"></div>
         <span id="firebase-status-text">Connecting…</span>
       </div>
-      <button class="btn btn-secondary btn-sm" id="config-btn" title="Firebase Config">⚙️</button>
-      <button class="btn btn-danger btn-sm" id="reset-btn" title="Reset Season">↺ Reset</button>
+      <button class="btn btn-secondary btn-sm admin-only" id="config-btn" title="Manage Admins">⚙️ Admins</button>
+      <button class="btn btn-danger btn-sm admin-only" id="reset-btn" title="Reset Season">↺ Reset</button>
+      <button class="btn btn-secondary btn-sm" id="logout-btn" title="Log out" onclick="doLogout()">🚪 Logout</button>
     </div>
   </div>
 </header>
@@ -81,6 +219,7 @@
             <tr>
               <th>#</th>
               <th>Player</th>
+              <th>Team</th>
               <th>Tournaments</th>
               <th>BA</th>
               <th>BD</th>
@@ -99,7 +238,7 @@
   <div class="page" id="page-players">
     <div class="section-header">
       <div class="section-title"><span>👥</span> Player Management</div>
-      <button class="btn btn-primary" id="add-player-btn">+ Add Player</button>
+      <button class="btn btn-primary admin-only" id="add-player-btn">+ Add Player</button>
     </div>
     <div class="card" style="margin-bottom:20px;">
       <div style="display:flex;gap:12px;align-items:center;margin-bottom:16px;">
@@ -111,12 +250,12 @@
       </div>
     </div>
     <!-- Bulk Add -->
-    <div class="card">
+    <div class="card admin-only">
       <div class="card-title">📋 Bulk Add Players</div>
       <div class="form-group">
-        <label class="form-label">Enter player names (one per line)</label>
-        <textarea class="form-input" id="bulk-textarea" rows="6" placeholder="Player 1&#10;Player 2&#10;Player 3&#10;…"></textarea>
-        <div class="form-hint">Enter one player name per line — up to 36 players total</div>
+        <label class="form-label">Enter player names and teams (format: Name - Team)</label>
+        <textarea class="form-input" id="bulk-textarea" rows="6" placeholder="Player 1 - Real Madrid&#10;Player 2 - Barcelona&#10;Player 3 - Man City&#10;…"></textarea>
+        <div class="form-hint">Enter one player per line. If no team is provided, it defaults to "Free Agent". Max 36 players.</div>
       </div>
       <button class="btn btn-primary" id="bulk-add-btn">➕ Add All</button>
     </div>
@@ -138,13 +277,13 @@
     </div>
     <div style="font-size:13px;color:var(--text-secondary);margin-bottom:20px;">Whole-season awards for best attack and best defence across all tournaments. Points: 1st=200, 2nd=150, 3rd=120</div>
     <div class="session-awards-grid">
-      <div class="award-card">
+      <div class="award-card admin-only">
         <div class="award-icon">⚽</div>
         <div class="award-title">🥾 Best Attack — Season</div>
         <div id="ba-season-slots"></div>
         <button class="btn btn-primary btn-sm" id="save-ba-season" style="margin-top:14px;width:100%;">💾 Save</button>
       </div>
-      <div class="award-card">
+      <div class="award-card admin-only">
         <div class="award-icon">🛡️</div>
         <div class="award-title">🛡️ Best Defence — Season</div>
         <div id="bd-season-slots"></div>
@@ -164,7 +303,7 @@
   <div class="page" id="page-voting">
     <div class="section-header">
       <div class="section-title"><span>🗳️</span> Voting System</div>
-      <button class="btn btn-primary" id="add-voter-btn">+ Add Voter</button>
+      <button class="btn btn-primary admin-only" id="add-voter-btn">+ Add Voter</button>
     </div>
 
     <div style="display:grid;grid-template-columns:1fr 280px;gap:24px;align-items:start;">
@@ -179,7 +318,7 @@
         <div class="voting-grid" id="voting-grid">
           <div class="empty-state" style="grid-column:1/-1;"><div class="empty-icon">🗳️</div><div class="empty-title">No voters yet</div><div class="empty-desc">Add voters to start the voting process</div></div>
         </div>
-        <div style="margin-top:20px;display:flex;gap:12px;flex-wrap:wrap;">
+        <div style="margin-top:20px;display:flex;gap:12px;flex-wrap:wrap;" class="admin-only">
           <button class="btn btn-primary" id="tally-votes-btn">📊 Calculate Results</button>
           <button class="btn btn-secondary" id="clear-votes-btn">🗑️ Clear All Votes</button>
         </div>
@@ -208,7 +347,7 @@
   <div class="page" id="page-finals">
     <div class="section-header">
       <div class="section-title"><span>🏆</span> Ballandor Finals</div>
-      <button class="btn btn-primary" id="calc-finals-btn">🔄 Recalculate</button>
+      <button class="btn btn-primary admin-only" id="calc-finals-btn">🔄 Recalculate</button>
     </div>
 
     <div id="winner-area" style="display:none;">
@@ -289,6 +428,10 @@
       <div class="form-group">
         <label class="form-label">Player Name</label>
         <input class="form-input" id="new-player-name" placeholder="Enter player name…" maxlength="30" />
+      </div>
+      <div class="form-group">
+        <label class="form-label">Team (Optional)</label>
+        <input class="form-input" id="new-player-team" placeholder="e.g. Real Madrid…" maxlength="30" />
       </div>
       <div style="display:flex;gap:10px;">
         <button class="btn btn-primary" id="confirm-add-player">✅ Add Player</button>
