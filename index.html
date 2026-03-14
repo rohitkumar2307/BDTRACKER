@@ -302,6 +302,7 @@
       </div>
       <button class="btn btn-primary admin-only" id="td-manage-participants-btn" style="display:none;" onclick="openParticipantsModal()">👥 Manage Participants</button>
     </div>
+    <nav class="breadcrumb" id="td-breadcrumb" aria-label="Breadcrumb"></nav>
 
     <!-- Podium Section -->
     <div class="tournament-podium" id="td-podium">
@@ -397,6 +398,19 @@
           </div>
           
           <button class="btn btn-primary" style="width:100%;justify-content:center;" onclick="submitFreeformMatch()">✅ Save Match</button>
+        </div>
+
+        <div class="card admin-only" style="margin-bottom:20px;">
+          <div class="card-title">🏆 Manage Brackets</div>
+          <div style="font-size:13px;color:var(--text-secondary);margin-bottom:12px;">
+            Configure knockout brackets for this tournament. Assign fixtures, enter scores, and automatically progress winners.
+          </div>
+          <button class="btn btn-secondary" style="width:100%;justify-content:center;margin-bottom:8px;" onclick="openBracketModal(CURRENT_TD_ID)">
+            📋 Open Bracket Editor
+          </button>
+          <div style="font-size:11px;color:var(--text-secondary);">
+            Bracket changes are synced to standings and tournament points.
+          </div>
         </div>
 
         <div class="card">
@@ -573,6 +587,20 @@
         <label class="form-label">Team (Optional)</label>
         <input class="form-input" id="new-player-team" placeholder="e.g. Real Madrid…" maxlength="30" />
       </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">Team Type</label>
+          <select class="form-select" id="new-player-team-type">
+            <option value="club">Club</option>
+            <option value="national">National</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Logo / Flag URL (Optional)</label>
+          <input class="form-input" id="new-player-logo" placeholder="https://…" maxlength="200" />
+          <div class="form-hint">Use a small square logo or country flag image.</div>
+        </div>
+      </div>
       <div style="display:flex;gap:10px;">
         <button class="btn btn-primary" id="confirm-add-player">✅ Add Player</button>
         <button class="btn btn-secondary" data-close="add-player-modal">Cancel</button>
@@ -649,10 +677,47 @@
     <div class="modal-body">
       <div id="bracket-controls" class="admin-only" style="margin-bottom:20px;display:flex;gap:10px;">
         <button class="btn btn-primary" id="btn-generate-bracket">🎲 Generate Fixtures</button>
-        <button class="btn btn-danger" id="btn-clear-bracket">🗑️ Clear Bracket</button>
+        <button class="btn btn-danger" id="btn-clear-bracket">🧹 Clear Tournament</button>
       </div>
       <div id="bracket-container" style="display:flex; flex-direction:column; gap:30px; overflow-x:auto;">
         <!-- Rounds injected here by JS -->
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ EDIT MATCH MODAL ═══ -->
+<div class="modal-overlay" id="edit-match-modal">
+  <div class="modal" style="max-width:420px;">
+    <div class="modal-header">
+      <div class="modal-title">✏️ Edit Match</div>
+      <button class="modal-close" data-close="edit-match-modal">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">Player 1</label>
+          <select class="form-select" id="edit-match-p1"></select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Player 2</label>
+          <select class="form-select" id="edit-match-p2"></select>
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">Score 1</label>
+          <input class="form-input" id="edit-match-s1" type="number" min="0" />
+        </div>
+        <div class="form-group">
+          <label class="form-label">Score 2</label>
+          <input class="form-input" id="edit-match-s2" type="number" min="0" />
+        </div>
+      </div>
+      <div class="form-hint">Changing opponents or scores will recalculate the winner and update standings.</div>
+      <div style="display:flex;gap:10px;margin-top:14px;">
+        <button class="btn btn-primary admin-only" style="flex:1;" onclick="applyEditMatch()">💾 Save Changes</button>
+        <button class="btn btn-secondary" data-close="edit-match-modal">Cancel</button>
       </div>
     </div>
   </div>

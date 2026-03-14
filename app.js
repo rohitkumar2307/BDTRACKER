@@ -40,7 +40,7 @@ function switchLoginTab(tab) {
 
 function populatePlayerLoginSelect() {
   const sel = document.getElementById('player-login-select');
-  const players = getPlayersArray();
+  const players = getPlayersArray().filter(p => !STATE.voters?.[p.id]?.submitted);
   sel.innerHTML = '<option value="">— Choose your name —</option>' +
     players.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('');
 }
@@ -276,6 +276,12 @@ function renderBallotSlots(voter) {
 function pvUpdateVote(rank, playerId) {
   // Prevent duplicate picks across ranks
   if (playerId) {
+    // Prevent voting for self
+    if (playerId === AUTH.userId) {
+      showNotif('You cannot vote for yourself', 'error');
+      document.getElementById(`pvslot-${rank}`).value = '';
+      return;
+    }
     for (let r = 1; r <= 7; r++) {
       if (r === rank) continue;
       const sel = document.getElementById(`pvslot-${r}`);
@@ -296,6 +302,7 @@ async function submitPlayerVote() {
   for (let r = 1; r <= 7; r++) {
     const val = document.getElementById(`pvslot-${r}`)?.value;
     if (!val) continue;
+    if (val === pid) { showNotif('You cannot vote for yourself', 'error'); return; }
     if (usedIds.has(val)) { showNotif('Duplicate pick detected!', 'error'); return; }
     usedIds.add(val); votes[r] = val;
   }
@@ -304,9 +311,10 @@ async function submitPlayerVote() {
   // Ensure voter entry exists in STATE.voters
   if (!STATE.voters) STATE.voters = {};
   if (!STATE.voters[pid]) {
-    STATE.voters[pid] = { id: pid, name: STATE.players[pid]?.name || 'Player', votes: {} };
+    STATE.voters[pid] = { id: pid, name: STATE.players[pid]?.name || 'Player', votes: {}, submitted: false };
   }
   STATE.voters[pid].votes = votes;
+  STATE.voters[pid].submitted = true;
 
   const btn = document.getElementById('pv-submit-btn');
   btn.innerHTML = '<span class="spin"></span> Saving…'; btn.disabled = true;
@@ -314,6 +322,8 @@ async function submitPlayerVote() {
   btn.innerHTML = '✅ Submit My Vote'; btn.disabled = false;
 
   showNotif('🗳️ Vote submitted! Thank you!', 'success');
+  // Refresh login player list to hide this voter from impersonation
+  populatePlayerLoginSelect();
   // Show confirmation
   document.getElementById('pv-ballot').style.display = 'none';
   document.getElementById('pv-already-voted').style.display = 'block';
@@ -492,7 +502,7 @@ const SESSION_PTS = { 1: 200, 2: 150, 3: 120 };
 
 // ─── APP STATE ────────────────────────────────────────────────────────
 const STATE = {
-  players: {},      // { id: { name, id, team } }
+  players: {},      // { id: { id, name, team, teamType, logo } }
   results: {},      // { tournamentId: { positions: {1: playerId, ...}, ba: [p1,p2,p3], bd: [p1,p2,p3] } }
   session: {        // whole-season BA/BD awards
     ba: { 1: null, 2: null, 3: null },
@@ -598,7 +608,16 @@ function addPlayer(name, team = "") {
     return showNotif(`"${name}" is already registered`, 'error');
   }
   const id = 'p_' + Date.now() + '_' + Math.random().toString(36).slice(2,6);
-  STATE.players[id] = { id, name, team };
+  // If advanced player fields have been captured in the form, read them; otherwise fall back to defaults.
+  let teamType = 'club';
+  let logo = '';
+  try {
+    const ttEl = document.getElementById('new-player-team-type');
+    const logoEl = document.getElementById('new-player-logo');
+    if (ttEl && ttEl.value) teamType = ttEl.value;
+    if (logoEl && logoEl.value) logo = logoEl.value.trim();
+  } catch(e) {}
+  STATE.players[id] = { id, name, team, teamType, logo };
   saveToFirebase('ballandor/players', STATE.players);
   showNotif(`✅ ${name} added!`, 'success');
 }
@@ -614,6 +633,21 @@ function removePlayer(id) {
 
 function getPlayersArray() {
   return Object.values(STATE.players).sort((a,b) => a.name.localeCompare(b.name));
+}
+
+function getPlayerLogoImg(player, sizeClass = '') {
+  if (!player || !player.logo) return '';
+  const typeLabel = player.teamType === 'national' ? 'Flag' : 'Logo';
+  const alt = `${typeLabel} of ${player.team || ''}`.trim();
+  const cls = sizeClass ? `player-logo ${sizeClass}` : 'player-logo';
+  return `<img src="${esc(player.logo)}" alt="${esc(alt)}" class="${cls}">`;
+}
+
+function renderPlayerNameWithLogo(player) {
+  if (!player) return '—';
+  const logo = getPlayerLogoImg(player, 'small');
+  if (!logo) return esc(player.name);
+  return `<span class="player-with-logo">${logo}<span>${esc(player.name)}</span></span>`;
 }
 
 // ─── SCORING ENGINE ──────────────────────────────────────────────────
@@ -770,9 +804,10 @@ function renderDashboard() {
   }
   body.innerHTML = ranked.map((p, i) => {
     const rankClass = i === 0 ? 'rank-1' : i === 1 ? 'rank-2' : i === 2 ? 'rank-3' : 'rank-other';
+    const nameCell = renderPlayerNameWithLogo(p);
     return `<tr>
       <td><span class="rank-badge ${rankClass}">${i+1}</span></td>
-      <td class="player-name-cell">${esc(p.name)}</td>
+      <td class="player-name-cell">${nameCell}</td>
       <td style="color:var(--text-secondary);font-size:12px;">${esc(p.team || 'Free Agent')}</td>
       <td class="points-cell">${p.tournamentPts}</td>
       <td class="points-cell">${p.sessionPts}</td>
@@ -794,16 +829,24 @@ function renderPlayers() {
     grid.innerHTML = `<div class="empty-state" style="grid-column:1/-1;"><div class="empty-icon">👤</div><div class="empty-title">No players found</div><div class="empty-desc">${players.length ? 'Try a different search' : 'Click "Add Player" to register participants'}</div></div>`;
     return;
   }
-  grid.innerHTML = filtered.map(p => `
-    <div class="player-chip" id="chip-${p.id}">
-      <div class="player-avatar">${p.name.charAt(0).toUpperCase()}</div>
-      <div style="flex:1;">
-        <div class="player-chip-name">${esc(p.name)}</div>
-        <div style="font-size:11px;color:var(--text-secondary);margin-top:2px;">🛡️ ${esc(p.team)}</div>
+  grid.innerHTML = filtered.map(p => {
+    const logo = getPlayerLogoImg(p, 'small');
+    const avatarInner = logo || esc(p.name.charAt(0).toUpperCase());
+    const teamLabel = p.team || 'Free Agent';
+    const typeLabel = p.teamType === 'national' ? '🇺🇳 National' : '🏟️ Club';
+    return `
+      <div class="player-chip" id="chip-${p.id}">
+        <div class="player-avatar">${avatarInner}</div>
+        <div style="flex:1;">
+          <div class="player-chip-name">${esc(p.name)}</div>
+          <div style="font-size:11px;color:var(--text-secondary);margin-top:2px;">
+            ${typeLabel} · ${esc(teamLabel)}
+          </div>
+        </div>
+        ${AUTH.role === 'admin' ? `<button class="player-delete admin-only" onclick="removePlayer('${p.id}')" title="Remove">✕</button>` : ''}
       </div>
-      ${AUTH.role === 'admin' ? `<button class="player-delete admin-only" onclick="removePlayer('${p.id}')" title="Remove">✕</button>` : ''}
-    </div>
-  `).join('');
+    `;
+  }).join('');
 }
 
 function renderTournaments() {
@@ -874,6 +917,16 @@ function openTournamentDashboard(tid) {
   page.classList.add('active');
 
   document.getElementById('td-title').innerHTML = `<span>${t.icon}</span> ${t.roman}. ${t.name}`;
+  const bc = document.getElementById('td-breadcrumb');
+  if (bc) {
+    bc.innerHTML = `
+      <span>🏠 Dashboard</span>
+      <span class="breadcrumb-separator">›</span>
+      <span>🏟️ Tournaments</span>
+      <span class="breadcrumb-separator">›</span>
+      <span class="crumb-current">${esc(t.roman)}. ${esc(t.name)}</span>
+    `;
+  }
   
   // Show admin manage participants button if admin
   document.getElementById('td-manage-participants-btn').style.display = AUTH.role === 'admin' ? 'block' : 'none';
@@ -931,17 +984,17 @@ function renderTournamentPodium(standings) {
 
   // Gold (1st)
   document.getElementById('td-podium-1-name').textContent = p1 ? p1.name : '—';
-  document.getElementById('td-podium-1-team').textContent = p1 ? p1.team || 'Free Agent' : '—';
+  document.getElementById('td-podium-1-team').textContent = p1 ? (p1.team || 'Free Agent') : '—';
   document.getElementById('td-podium-1-pts').textContent = p1 ? `${p1.pts} pts` : '0 pts';
 
   // Silver (2nd)
   document.getElementById('td-podium-2-name').textContent = p2 ? p2.name : '—';
-  document.getElementById('td-podium-2-team').textContent = p2 ? p2.team || 'Free Agent' : '—';
+  document.getElementById('td-podium-2-team').textContent = p2 ? (p2.team || 'Free Agent') : '—';
   document.getElementById('td-podium-2-pts').textContent = p2 ? `${p2.pts} pts` : '0 pts';
 
   // Bronze (3rd)
   document.getElementById('td-podium-3-name').textContent = p3 ? p3.name : '—';
-  document.getElementById('td-podium-3-team').textContent = p3 ? p3.team || 'Free Agent' : '—';
+  document.getElementById('td-podium-3-team').textContent = p3 ? (p3.team || 'Free Agent') : '—';
   document.getElementById('td-podium-3-pts').textContent = p3 ? `${p3.pts} pts` : '0 pts';
 }
 
@@ -954,10 +1007,12 @@ function renderTournamentStandings(standings) {
 
   tbody.innerHTML = standings.map((p, i) => {
     const rankClass = i===0?'rank-1':i===1?'rank-2':i===2?'rank-3':'rank-other';
+    const playerObj = STATE.players[p.id] || { name: p.name, team: p.team, teamType: 'club', logo: '' };
+    const nameCell = renderPlayerNameWithLogo(playerObj);
     return `<tr>
       <td><span class="rank-badge ${rankClass}">${i+1}</span></td>
-      <td class="player-name-cell">${esc(p.name)}</td>
-      <td style="color:var(--text-secondary);font-size:12px;">${esc(p.team)}</td>
+      <td class="player-name-cell">${nameCell}</td>
+      <td style="color:var(--text-secondary);font-size:12px;">${esc(p.team || '—')}</td>
       <td>${p.mp}</td>
       <td>${p.w}</td>
       <td>${p.d}</td>
@@ -990,7 +1045,7 @@ function renderTournamentMatchHistory(tid) {
   });
 
   if (!allMatches.length) {
-    container.innerHTML = `<div style="text-align:center;padding:20px;color:var(--text-secondary);font-size:13px;">No completed matches yet</div>`;
+    container.innerHTML = `<div style="text-align:center;padding:20px;color:var(--text-secondary);font-size:13px;">Not played yet</div>`;
     return;
   }
 
@@ -999,8 +1054,12 @@ function renderTournamentMatchHistory(tid) {
   allMatches.reverse();
 
   container.innerHTML = allMatches.map(m => {
-    const p1 = STATE.players[m.p1]?.name || 'Unknown';
-    const p2 = STATE.players[m.p2]?.name || 'Unknown';
+    const p1Obj = STATE.players[m.p1] || null;
+    const p2Obj = STATE.players[m.p2] || null;
+    const p1Name = p1Obj?.name || 'Unknown';
+    const p2Name = p2Obj?.name || 'Unknown';
+    const p1Label = renderPlayerNameWithLogo(p1Obj);
+    const p2Label = renderPlayerNameWithLogo(p2Obj);
     return `
       <div class="mh-card">
         <div class="mh-header">
@@ -1008,13 +1067,13 @@ function renderTournamentMatchHistory(tid) {
           <span>${m.winner ? 'FINAL' : 'PENDING'}</span>
         </div>
         <div class="mh-body">
-          <div class="mh-player ${m.winner === m.p1 ? 'winner' : m.winner ? 'loser' : ''}">${esc(p1)}</div>
+          <div class="mh-player ${m.winner === m.p1 ? 'winner' : m.winner ? 'loser' : ''}">${p1Label}</div>
           <div class="mh-score-box">
             <span class="mh-score ${m.winner === m.p1 ? 'winner' : 'loser'}">${m.score1}</span>
             <span style="color:var(--text-secondary);font-size:12px;display:flex;align-items:center;">-</span>
             <span class="mh-score ${m.winner === m.p2 ? 'winner' : 'loser'}">${m.score2}</span>
           </div>
-          <div class="mh-player ${m.winner === m.p2 ? 'winner' : m.winner ? 'loser' : ''}" style="text-align:right;">${esc(p2)}</div>
+          <div class="mh-player ${m.winner === m.p2 ? 'winner' : m.winner ? 'loser' : ''}" style="text-align:right;">${p2Label}</div>
         </div>
       </div>
     `;
@@ -1252,7 +1311,7 @@ function renderSession() {
 
   body.innerHTML = ranked.map((p,i) => `<tr>
     <td><span class="rank-badge ${i===0?'rank-1':i===1?'rank-2':i===2?'rank-3':'rank-other'}">${i+1}</span></td>
-    <td class="player-name-cell">${esc(p.name)}</td>
+    <td class="player-name-cell">${renderPlayerNameWithLogo(p)}</td>
     <td class="points-cell">${p.ba}</td>
     <td class="points-cell">${p.bd}</td>
     <td class="points-cell total">${p.total}</td>
@@ -1320,9 +1379,11 @@ function renderVoting() {
       }).filter(Boolean).join('') + (hasVoted ? '' : `<div style="padding:14px 0;text-align:center;font-size:12px;color:var(--text-secondary);">No votes cast yet</div>`) + `</div>`;
     }
 
+    const voterPlayer = STATE.players[voter.id] || { name: voter.name, teamType: 'club', logo: '' };
+    const voterLogo = getPlayerLogoImg(voterPlayer, 'tiny');
     return `<div class="voter-card">
       <div class="voter-name">
-        <span class="player-avatar" style="width:32px;height:32px;font-size:12px;">${voter.name.charAt(0)}</span>
+        <span class="player-avatar" style="width:32px;height:32px;font-size:12px;">${voterLogo || esc(voter.name.charAt(0))}</span>
         ${esc(voter.name)}
         <span class="voter-status-badge ${hasVoted?'voted-badge':'pending-badge'}">${hasVoted?'✅ Voted':'⏳ Pending'}</span>
         ${AUTH.role === 'admin' ? `<button class="btn btn-danger btn-sm" style="margin-left:auto;padding:4px 8px;font-size:11px;" onclick="removeVoter('${voter.id}')">✕</button>` : ''}
@@ -1500,7 +1561,8 @@ function addVoter(playerId) {
   STATE.voters[playerId] = {
     id: playerId,
     name: STATE.players[playerId]?.name || 'Unknown',
-    votes: {}
+    votes: {},
+    submitted: false
   };
   saveToFirebase('ballandor/voters', STATE.voters);
   closeModal('add-voter-modal');
@@ -1540,6 +1602,16 @@ function updateVote(voterId, rank, playerId) {
       }, 50);
       return;
     }
+  }
+
+  // Prevent self-voting
+  if (playerId && voterId === playerId) {
+    showNotif('Players cannot vote for themselves', 'error');
+    setTimeout(() => {
+      const sel = document.querySelector(`[data-voter="${voterId}"][data-rank="${rank}"]`);
+      if (sel) sel.value = '';
+    }, 50);
+    return;
   }
 
   STATE.voters[voterId].votes[rank] = playerId || null;
@@ -1600,9 +1672,10 @@ function calculateFinals() {
   const body = document.getElementById('finals-body');
   body.innerHTML = ranked.map((p, i) => {
     const rankClass = i===0?'rank-1':i===1?'rank-2':i===2?'rank-3':'rank-other';
+    const nameCell = renderPlayerNameWithLogo(p);
     return `<tr>
       <td><span class="rank-badge ${rankClass}">${i+1}</span></td>
-      <td class="player-name-cell">${esc(p.name)}</td>
+      <td class="player-name-cell">${nameCell}</td>
       <td class="points-cell">${p.tournamentPts}</td>
       <td class="points-cell">${p.sessionPts}</td>
       <td class="points-cell">${p.votingPts}</td>
@@ -1648,8 +1721,9 @@ function renderBreakdownTable(ranked) {
       return `<td class="${pts?'cell-pts':'cell-0'}">${pts||'—'}</td>`;
     }).join('');
 
+    const nameCell = renderPlayerNameWithLogo(p);
     return `<tr>
-      <td>${esc(p.name)}</td>
+      <td>${nameCell}</td>
       ${tCols}
       <td class="cell-pts">${computeSessionPointsForType(p.id,'ba')||'—'}</td>
       <td class="cell-pts">${computeSessionPointsForType(p.id,'bd')||'—'}</td>
@@ -1681,6 +1755,39 @@ function launchConfetti() {
   }
 }
 
+// ─── UNDO MANAGER (ADMIN ONLY) ────────────────────────────────────────
+let CURRENT_UNDO = null;
+let CURRENT_UNDO_TIMER = null;
+
+function clearUndoTimer() {
+  if (CURRENT_UNDO_TIMER) {
+    clearTimeout(CURRENT_UNDO_TIMER);
+    CURRENT_UNDO_TIMER = null;
+  }
+}
+
+function createUndoAction(restoreFn, durationMs = 15000) {
+  if (typeof restoreFn !== 'function') return;
+  clearUndoTimer();
+  CURRENT_UNDO = restoreFn;
+  CURRENT_UNDO_TIMER = setTimeout(() => {
+    CURRENT_UNDO = null;
+    CURRENT_UNDO_TIMER = null;
+  }, durationMs);
+}
+
+async function performUndo() {
+  if (!CURRENT_UNDO || AUTH.role !== 'admin') return;
+  const fn = CURRENT_UNDO;
+  CURRENT_UNDO = null;
+  clearUndoTimer();
+  try {
+    await fn();
+  } catch (e) {
+    showNotif('Undo failed: ' + (e?.message || e), 'error');
+  }
+}
+
 // ─── MODALS ───────────────────────────────────────────────────────────
 function openModal(id) {
   document.getElementById(id)?.classList.add('open');
@@ -1690,16 +1797,35 @@ function closeModal(id) {
 }
 
 // ─── NOTIFICATIONS ────────────────────────────────────────────────────
-function showNotif(msg, type = 'info') {
+function showNotif(msg, type = 'info', options) {
   const container = document.getElementById('notif-container');
   const el = document.createElement('div');
   el.className = `notif ${type}`;
   el.textContent = msg;
+
+  // Optional inline Undo button for admins
+  const wantsUndo = options && options.showUndo && AUTH.role === 'admin' && CURRENT_UNDO;
+  if (wantsUndo) {
+    el.classList.add('notif-with-undo');
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'notif-undo-btn';
+    btn.textContent = options.undoLabel || 'Undo';
+    btn.addEventListener('click', () => {
+      // Trigger undo and remove this notification
+      performUndo();
+      el.style.animation = 'notifOut 0.3s ease forwards';
+      setTimeout(() => el.remove(), 300);
+    });
+    el.appendChild(btn);
+  }
+
   container.appendChild(el);
+  const ttl = wantsUndo ? 12000 : 3000;
   setTimeout(() => {
     el.style.animation = 'notifOut 0.3s ease forwards';
     setTimeout(() => el.remove(), 300);
-  }, 3000);
+  }, ttl);
 }
 
 // ─── UTILITIES ───────────────────────────────────────────────────────
@@ -2104,6 +2230,19 @@ async function submitMatchResult(tournamentId, roundIndex, matchId, s1, s2) {
     return showNotif('Matches cannot end in a tie. Please include penalty goals if tied.', 'error');
   }
 
+  // Snapshot for undo before mutating
+  const prev = JSON.parse(JSON.stringify(match));
+
+  // Register undo (admin only)
+  createUndoAction(async () => {
+    STATE.matches[tournamentId][roundIndex][matchId] = prev;
+    await saveMatch(tournamentId, roundIndex, matchId, prev);
+    updateTournamentStats(tournamentId);
+    renderTournamentDashboard(tournamentId);
+    renderBracketData(tournamentId);
+    showNotif('Match score reverted', 'info');
+  });
+
   match.score1 = score1;
   match.score2 = score2;
   match.winner = winnerId;
@@ -2121,7 +2260,7 @@ async function submitMatchResult(tournamentId, roundIndex, matchId, s1, s2) {
     await resolveTournamentCompletion(tournamentId);
   }
 
-  showNotif('Score saved!', 'success');
+  showNotif('Score saved!', 'success', { showUndo: true, undoLabel: 'Undo score' });
   renderBracketData(tournamentId);
 }
 
@@ -2188,6 +2327,7 @@ async function resolveTournamentCompletion(tournamentId) {
 
 // ── UI Integration ──
 let CURRENT_BRACKET_TID = null;
+let CURRENT_EDIT_MATCH_CTX = null;
 
 function openBracketModal(tournamentId) {
   CURRENT_BRACKET_TID = tournamentId;
@@ -2195,6 +2335,135 @@ function openBracketModal(tournamentId) {
   document.getElementById('bracket-modal-title').innerHTML = `🏆 Manage Bracket: ${tConfig.name}`;
   openModal('bracket-modal');
   renderBracketData(tournamentId);
+}
+
+function getTournamentParticipants(tournamentId) {
+  const stats = STATE.tournamentStats?.[tournamentId];
+  if (stats && Object.keys(stats).length) {
+    return Object.keys(stats)
+      .map(pid => STATE.players[pid])
+      .filter(Boolean)
+      .sort((a,b) => a.name.localeCompare(b.name));
+  }
+  return getPlayersArray();
+}
+
+function openEditMatch(tournamentId, roundIndex, matchId) {
+  if (AUTH.role !== 'admin') return;
+  const match = STATE.matches?.[tournamentId]?.[roundIndex]?.[matchId];
+  if (!match || match.isBye) return;
+  CURRENT_EDIT_MATCH_CTX = { tournamentId, roundIndex, matchId };
+
+  const p1Sel = document.getElementById('edit-match-p1');
+  const p2Sel = document.getElementById('edit-match-p2');
+  const s1El = document.getElementById('edit-match-s1');
+  const s2El = document.getElementById('edit-match-s2');
+
+  const participants = getTournamentParticipants(tournamentId);
+  const opts = ['<option value="">— Select —</option>'].concat(
+    participants.map(p => `<option value="${p.id}">${esc(p.name)}</option>`)
+  ).join('');
+
+  p1Sel.innerHTML = opts;
+  p2Sel.innerHTML = opts;
+  p1Sel.value = match.p1 || '';
+  p2Sel.value = match.p2 || '';
+
+  s1El.value = match.score1 != null ? match.score1 : '';
+  s2El.value = match.score2 != null ? match.score2 : '';
+
+  openModal('edit-match-modal');
+}
+
+async function applyEditMatch() {
+  if (AUTH.role !== 'admin' || !CURRENT_EDIT_MATCH_CTX) return;
+  const { tournamentId, roundIndex, matchId } = CURRENT_EDIT_MATCH_CTX;
+  const match = STATE.matches?.[tournamentId]?.[roundIndex]?.[matchId];
+  if (!match || match.isBye) { closeModal('edit-match-modal'); return; }
+
+  const p1Id = document.getElementById('edit-match-p1').value;
+  const p2Id = document.getElementById('edit-match-p2').value;
+  const s1Raw = document.getElementById('edit-match-s1').value;
+  const s2Raw = document.getElementById('edit-match-s2').value;
+
+  if (!p1Id || !p2Id) {
+    showNotif('Select both players', 'error');
+    return;
+  }
+  if (p1Id === p2Id) {
+    showNotif('Player 1 and Player 2 must be different', 'error');
+    return;
+  }
+
+  const score1 = s1Raw === '' ? null : parseInt(s1Raw, 10);
+  const score2 = s2Raw === '' ? null : parseInt(s2Raw, 10);
+  if ((score1 !== null && isNaN(score1)) || (score2 !== null && isNaN(score2))) {
+    showNotif('Scores must be numbers or left blank', 'error');
+    return;
+  }
+
+  const prev = JSON.parse(JSON.stringify(match));
+
+  createUndoAction(async () => {
+    STATE.matches[tournamentId][roundIndex][matchId] = prev;
+    await saveMatch(tournamentId, roundIndex, matchId, prev);
+    updateTournamentStats(tournamentId);
+    renderTournamentDashboard(tournamentId);
+    renderBracketData(tournamentId);
+    showNotif('Match edit reverted', 'info');
+  });
+
+  match.p1 = p1Id;
+  match.p2 = p2Id;
+  match.score1 = score1;
+  match.score2 = score2;
+
+  // Recalculate winner if scores are present
+  if (score1 !== null && score2 !== null) {
+    if (score1 > score2) match.winner = p1Id;
+    else if (score2 > score1) match.winner = p2Id;
+    else {
+      showNotif('Matches cannot end in a tie. Please include penalty goals if tied.', 'error');
+      match.winner = null;
+    }
+  } else {
+    match.winner = null;
+  }
+
+  await saveMatch(tournamentId, roundIndex, matchId, match);
+  updateTournamentStats(tournamentId);
+  renderTournamentDashboard(tournamentId);
+  renderBracketData(tournamentId);
+
+  closeModal('edit-match-modal');
+  CURRENT_EDIT_MATCH_CTX = null;
+  showNotif('Match updated', 'success', { showUndo: true, undoLabel: 'Undo edit' });
+}
+
+async function deleteMatch(tournamentId, roundIndex, matchId) {
+  if (AUTH.role !== 'admin') return;
+  const match = STATE.matches?.[tournamentId]?.[roundIndex]?.[matchId];
+  if (!match) return;
+
+  const prev = JSON.parse(JSON.stringify(match));
+
+  createUndoAction(async () => {
+    if (!STATE.matches[tournamentId]) STATE.matches[tournamentId] = {};
+    if (!STATE.matches[tournamentId][roundIndex]) STATE.matches[tournamentId][roundIndex] = {};
+    STATE.matches[tournamentId][roundIndex][matchId] = prev;
+    await saveMatch(tournamentId, roundIndex, matchId, prev);
+    updateTournamentStats(tournamentId);
+    renderTournamentDashboard(tournamentId);
+    renderBracketData(tournamentId);
+    showNotif('Match restored', 'info');
+  });
+
+  delete STATE.matches[tournamentId][roundIndex][matchId];
+  await saveToFirebase(`ballandor/matches/${tournamentId}/${roundIndex}/${matchId}`, null);
+  updateTournamentStats(tournamentId);
+  renderTournamentDashboard(tournamentId);
+  renderBracketData(tournamentId);
+  showNotif('Match deleted', 'info', { showUndo: true, undoLabel: 'Undo delete' });
 }
 
 function renderBracketData(tournamentId) {
@@ -2210,13 +2479,13 @@ function renderBracketData(tournamentId) {
     return;
   }
 
-  let html = `<div style="display:flex; gap:30px;">`;
+  let html = `<div class="bracket-rounds-row">`;
   
   const numericRounds = Object.keys(matches).filter(k => !isNaN(k)).map(Number).sort((a,b)=>a-b);
   
   numericRounds.forEach(r => {
     const matchArray = Object.values(matches[r]).sort((a,b)=>a.index-b.index);
-    html += `<div style="min-width:240px; display:flex; flex-direction:column; justify-content:space-around; gap:15px; position:relative;">
+    html += `<div class="bracket-round-column">
       <h4 style="text-align:center; color:var(--gold); font-family:'Cinzel',serif; border-bottom:1px solid rgba(255,255,255,0.1); padding-bottom:10px; margin-bottom:10px;">Round ${r+1}</h4>`;
       
     matchArray.forEach(m => {
@@ -2232,30 +2501,32 @@ function renderBracketData(tournamentId) {
       const p2WinnerClass = m.winner === m.p2 ? 'color:#6fcf6f; font-weight:bold;' : (m.winner ? 'opacity:0.5;' : '');
 
       if (m.isBye) {
-        html += `<div style="background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.05); border-radius:8px; padding:10px;">
-          <div style="font-size:13px; color:var(--text-secondary); text-align:center;">${p1name !== 'TBD' ? p1name : p2name} (BYE)</div>
+        html += `<div class="bracket-match bye-match">
+          <div class="bracket-bye-label">${esc(p1name !== 'TBD' ? p1name : p2name)} (BYE)</div>
         </div>`;
       } else {
-        html += `<div style="background:var(--gradient-card); border:1px solid var(--border-glass); border-radius:8px; display:flex; flex-direction:column;">
+        html += `<div class="bracket-match">
           
-          <div style="display:flex; justify-content:space-between; align-items:center; padding:8px 12px; border-bottom:1px solid rgba(255,255,255,0.05);">
-            <div style="font-size:13px; ${p1WinnerClass}">
+          <div class="bracket-row">
+            <div class="bracket-player" style="${p1WinnerClass}">
               ${esc(p1name)} <span style="font-size:10px; color:var(--text-secondary);">${esc(p1team)}</span>
             </div>
-            <input type="number" id="sc1_${m.id}" value="${s1}" style="width:40px; background:rgba(0,0,0,0.3); border:1px solid rgba(255,255,255,0.1); color:white; text-align:center; border-radius:4px; padding:2px;" class="admin-only" ${m.winner?'disabled':''}>
-            ${!m.winner && s1!=='' ? `<span style="width:40px; text-align:center; display:none;" class="readonly-score">${s1}</span>` : `<span style="width:40px; text-align:center; display:none;" class="readonly-score">${s1}</span>`}
+            <input type="number" id="sc1_${m.id}" value="${s1}" class="admin-only bracket-score-input">
+            <span style="width:40px; text-align:center; display:none;" class="readonly-score">${s1}</span>
           </div>
 
-          <div style="display:flex; justify-content:space-between; align-items:center; padding:8px 12px;">
-            <div style="font-size:13px; ${p2WinnerClass}">
+          <div class="bracket-row">
+            <div class="bracket-player" style="${p2WinnerClass}">
               ${esc(p2name)} <span style="font-size:10px; color:var(--text-secondary);">${esc(p2team)}</span>
             </div>
-            <input type="number" id="sc2_${m.id}" value="${s2}" style="width:40px; background:rgba(0,0,0,0.3); border:1px solid rgba(255,255,255,0.1); color:white; text-align:center; border-radius:4px; padding:2px;" class="admin-only" ${m.winner?'disabled':''}>
-            ${!m.winner && s2!=='' ? `<span style="width:40px; text-align:center; display:none;" class="readonly-score">${s2}</span>` : `<span style="width:40px; text-align:center; display:none;" class="readonly-score">${s2}</span>`}
+            <input type="number" id="sc2_${m.id}" value="${s2}" class="admin-only bracket-score-input">
+            <span style="width:40px; text-align:center; display:none;" class="readonly-score">${s2}</span>
           </div>
           
-          <div class="admin-only" style="padding:0 12px 8px 12px;">
-             ${!m.winner ? `<button class="btn btn-primary" style="width:100%; font-size:11px; padding:4px;" onclick="submitMatchResult('${tournamentId}', ${r}, '${m.id}', document.getElementById('sc1_${m.id}').value, document.getElementById('sc2_${m.id}').value)">Save Result</button>` : `<div style="text-align:center; font-size:11px; color:#6fcf6f;">Finished</div>`}
+          <div class="admin-only bracket-actions">
+            <button class="btn btn-primary btn-sm" style="flex:1;" onclick="submitMatchResult('${tournamentId}', ${r}, '${m.id}', document.getElementById('sc1_${m.id}').value, document.getElementById('sc2_${m.id}').value)">Save Result</button>
+            <button class="btn btn-secondary btn-sm" onclick="openEditMatch('${tournamentId}', ${r}, '${m.id}')">Edit Match</button>
+            <button class="btn btn-danger btn-sm" onclick="deleteMatch('${tournamentId}', ${r}, '${m.id}')">Delete</button>
           </div>
 
         </div>`;
@@ -2275,21 +2546,23 @@ function renderBracketData(tournamentId) {
     const p1WinnerClass = thirdMatch.winner === thirdMatch.p1 ? 'color:#6fcf6f; font-weight:bold;' : (thirdMatch.winner?'opacity:0.5;':'');
     const p2WinnerClass = thirdMatch.winner === thirdMatch.p2 ? 'color:#6fcf6f; font-weight:bold;' : (thirdMatch.winner?'opacity:0.5;':'');
 
-    html += `<div style="min-width:240px; display:flex; flex-direction:column; justify-content:center; gap:15px; position:relative; margin-left:20px; border-left:2px dashed rgba(255,255,255,0.1); padding-left:20px;">
+    html += `<div class="bracket-round-column bracket-third-column">
       <h4 style="text-align:center; color:#c0c0c0; font-family:'Cinzel',serif; border-bottom:1px solid rgba(255,255,255,0.1); padding-bottom:10px; margin-bottom:10px;">3rd Place Match</h4>
-      <div style="background:var(--gradient-card); border:1px solid var(--border-glass); border-radius:8px; display:flex; flex-direction:column;">
+      <div class="bracket-match">
           
-          <div style="display:flex; justify-content:space-between; align-items:center; padding:8px 12px; border-bottom:1px solid rgba(255,255,255,0.05);">
+          <div class="bracket-row">
             <div style="font-size:13px; ${p1WinnerClass}">${esc(p1name)}</div>
-            <input type="number" id="sc1_${thirdMatch.id}" value="${s1}" style="width:40px; background:rgba(0,0,0,0.3); border:1px solid rgba(255,255,255,0.1); color:white; text-align:center; border-radius:4px; padding:2px;" class="admin-only" ${thirdMatch.winner?'disabled':''}>
+            <input type="number" id="sc1_${thirdMatch.id}" value="${s1}" class="admin-only bracket-score-input">
           </div>
-          <div style="display:flex; justify-content:space-between; align-items:center; padding:8px 12px;">
+          <div class="bracket-row">
             <div style="font-size:13px; ${p2WinnerClass}">${esc(p2name)}</div>
-            <input type="number" id="sc2_${thirdMatch.id}" value="${s2}" style="width:40px; background:rgba(0,0,0,0.3); border:1px solid rgba(255,255,255,0.1); color:white; text-align:center; border-radius:4px; padding:2px;" class="admin-only" ${thirdMatch.winner?'disabled':''}>
+            <input type="number" id="sc2_${thirdMatch.id}" value="${s2}" class="admin-only bracket-score-input">
           </div>
           
-          <div class="admin-only" style="padding:0 12px 8px 12px;">
-             ${!thirdMatch.winner ? `<button class="btn btn-primary" style="width:100%; font-size:11px; padding:4px;" onclick="submitMatchResult('${tournamentId}', '3rd_place', '${thirdMatch.id}', document.getElementById('sc1_${thirdMatch.id}').value, document.getElementById('sc2_${thirdMatch.id}').value)">Save</button>` : `<div style="text-align:center; font-size:11px; color:#6fcf6f;">Finished</div>`}
+          <div class="admin-only bracket-actions">
+             <button class="btn btn-primary btn-sm" style="flex:1;" onclick="submitMatchResult('${tournamentId}', '3rd_place', '${thirdMatch.id}', document.getElementById('sc1_${thirdMatch.id}').value, document.getElementById('sc2_${thirdMatch.id}').value)">Save</button>
+             <button class="btn btn-secondary btn-sm" onclick="openEditMatch('${tournamentId}', '3rd_place', '${thirdMatch.id}')">Edit Match</button>
+             <button class="btn btn-danger btn-sm" onclick="deleteMatch('${tournamentId}', '3rd_place', '${thirdMatch.id}')">Delete</button>
           </div>
         </div>
     </div>`;
@@ -2316,9 +2589,35 @@ document.getElementById('btn-generate-bracket')?.addEventListener('click', async
 
 document.getElementById('btn-clear-bracket')?.addEventListener('click', async () => {
   if (!CURRENT_BRACKET_TID) return;
-  if(!confirm('Delete bracket completely?')) return;
-  if (STATE.matches) delete STATE.matches[CURRENT_BRACKET_TID];
-  await saveToFirebase(`ballandor/matches/${CURRENT_BRACKET_TID}`, null);
-  renderBracketData(CURRENT_BRACKET_TID);
-  showNotif('Bracket cleared. You can generate it again.', 'info');
+  if(!confirm('Are you sure you want to reset this tournament?')) return;
+
+  const tid = CURRENT_BRACKET_TID;
+  const prevMatches = STATE.matches?.[tid] ? JSON.parse(JSON.stringify(STATE.matches[tid])) : null;
+  const prevStats = STATE.tournamentStats?.[tid] ? JSON.parse(JSON.stringify(STATE.tournamentStats[tid])) : null;
+
+  createUndoAction(async () => {
+    if (prevMatches) {
+      if (!STATE.matches) STATE.matches = {};
+      STATE.matches[tid] = prevMatches;
+      await saveToFirebase(`ballandor/matches/${tid}`, prevMatches);
+    }
+    if (prevStats) {
+      if (!STATE.tournamentStats) STATE.tournamentStats = {};
+      STATE.tournamentStats[tid] = prevStats;
+      await saveToFirebase(`ballandor/tournamentStats/${tid}`, prevStats);
+    }
+    updateTournamentStats(tid);
+    renderTournamentDashboard(tid);
+    renderBracketData(tid);
+    showNotif('Tournament reset undone', 'info');
+  });
+
+  if (STATE.matches) delete STATE.matches[tid];
+  if (STATE.tournamentStats) delete STATE.tournamentStats[tid];
+  await saveToFirebase(`ballandor/matches/${tid}`, null);
+  await saveToFirebase(`ballandor/tournamentStats/${tid}`, null);
+
+  renderBracketData(tid);
+  renderTournamentDashboard(tid);
+  showNotif('Tournament cleared', 'info', { showUndo: true, undoLabel: 'Undo reset' });
 });
