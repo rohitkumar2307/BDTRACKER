@@ -2110,18 +2110,23 @@ async function saveMatch(tournamentId, roundIndex, matchId, matchData) {
   await saveToFirebase(`ballandor/matches/${tournamentId}/${roundIndex}/${matchId}`, matchData);
 }
 
-// Generator
-async function generateKnockoutFixtures(tournamentId) {
-  const tConfig = TOURNAMENTS.find(t => t.id === tournamentId);
-  if (!tConfig) return;
+// ─── UNIVERSAL TOURNAMENT FORMAT: GROUPS → KNOCKOUT ───────────────────
+const GROUP_ROUND_KEY = 'group_stage';
+const MATCH_META_KEY = '_meta';
 
-  // 1. Filter eligible participants
+function groupLetter(i) {
+  return String.fromCharCode('A'.charCodeAt(0) + i);
+}
+
+function getEligiblePlayersForTournament(tournamentId) {
+  const tConfig = TOURNAMENTS.find(t => t.id === tournamentId);
+  if (!tConfig) return [];
   let pool = getPlayersArray();
-  
+
   if (tConfig.special === 'finalissima') {
     const fw = getFinalissimaPlayers();
-    if (!fw.copaWinner || !fw.eurosWinner) return showNotif('Finalissima requires Copa & Euros winners first!', 'error');
-    pool = [STATE.players[fw.copaWinner], STATE.players[fw.eurosWinner]];
+    if (!fw.copaWinner || !fw.eurosWinner) return [];
+    pool = [STATE.players[fw.copaWinner], STATE.players[fw.eurosWinner]].filter(Boolean);
   } else if (tConfig.special === 'top8') {
     const top8 = getTop8Ids();
     pool = pool.filter(p => top8.includes(p.id));
@@ -2129,48 +2134,354 @@ async function generateKnockoutFixtures(tournamentId) {
     const top8 = getTop8Ids();
     pool = pool.filter(p => !top8.includes(p.id));
   }
-  
-  if (pool.length < 2) return showNotif('Not enough participants to generate a bracket', 'error');
+  return pool;
+}
 
-  // Shuffle pool (random draw)
-  pool = pool.sort(() => Math.random() - 0.5);
-
-  const size = computeBracketSize(pool.length);
-  const byesNeeded = size - pool.length;
-  
-  // Create participant array with BYEs
-  const drawList = pool.map(p => p.id);
-  for (let i = 0; i < byesNeeded; i++) drawList.push('BYE');
-  
-  // We shuffle once more, but ensure BYEs are spread out (or just random for now)
-  drawList.sort(() => Math.random() - 0.5);
-
-  const initialMatches = pairParticipants(drawList);
-  
-  // Calculate total rounds needed (e.g., 8 players = 3 rounds)
-  const totalRounds = Math.log2(size);
-  
-  // Clear any existing matches for this tournament
+function ensureTournamentMatchesRoot(tournamentId) {
   if (!STATE.matches) STATE.matches = {};
-  STATE.matches[tournamentId] = {};
+  if (!STATE.matches[tournamentId]) STATE.matches[tournamentId] = {};
+  if (!STATE.matches[tournamentId][MATCH_META_KEY]) STATE.matches[tournamentId][MATCH_META_KEY] = {};
+}
 
-  // Initialize Round 0 (First Round)
+function getTournamentMeta(tournamentId) {
+  return STATE.matches?.[tournamentId]?.[MATCH_META_KEY] || {};
+}
+
+async function saveTournamentMeta(tournamentId, meta) {
+  ensureTournamentMatchesRoot(tournamentId);
+  STATE.matches[tournamentId][MATCH_META_KEY] = meta;
+  await saveToFirebase(`ballandor/matches/${tournamentId}/${MATCH_META_KEY}`, meta);
+}
+
+function buildEmptyAssignments(tournamentId, groupCount) {
+  const eligible = getEligiblePlayersForTournament(tournamentId);
+  const assignments = {};
+  eligible.forEach(p => { assignments[p.id] = null; });
+  const groups = Array.from({ length: groupCount }, (_, i) => groupLetter(i));
+  return { assignments, groups };
+}
+
+function randomizeGroupAssignments(tournamentId, groupCount, playersPerGroup) {
+  const eligible = getEligiblePlayersForTournament(tournamentId);
+  const groups = Array.from({ length: groupCount }, (_, i) => groupLetter(i));
+  const shuffled = eligible.slice().sort(() => Math.random() - 0.5);
+  const assignments = {};
+
+  const capacity = groupCount * playersPerGroup;
+  const usable = shuffled.slice(0, capacity);
+  usable.forEach((p, idx) => {
+    assignments[p.id] = groups[idx % groups.length];
+  });
+  // Mark the rest as null (not in groups)
+  shuffled.slice(capacity).forEach(p => { assignments[p.id] = null; });
+  return { assignments, groups };
+}
+
+function getPlayersByGroup(tournamentId, meta) {
+  const eligible = getEligiblePlayersForTournament(tournamentId);
+  const byId = new Map(eligible.map(p => [p.id, p]));
+  const groupMap = {};
+  (meta.groups || []).forEach(g => { groupMap[g] = []; });
+
+  for (const [pid, grp] of Object.entries(meta.assignments || {})) {
+    if (!grp) continue;
+    if (!groupMap[grp]) groupMap[grp] = [];
+    const p = byId.get(pid);
+    if (p) groupMap[grp].push(p);
+  }
+
+  // Stable ordering by name
+  Object.values(groupMap).forEach(arr => arr.sort((a,b) => a.name.localeCompare(b.name)));
+  return groupMap;
+}
+
+function generateRoundRobinPairs(players) {
+  const ids = players.map(p => p.id);
+  const pairs = [];
+  for (let i = 0; i < ids.length; i++) {
+    for (let j = i + 1; j < ids.length; j++) {
+      pairs.push([ids[i], ids[j]]);
+    }
+  }
+  return pairs;
+}
+
+async function generateGroupFixtures(tournamentId) {
+  const meta = getTournamentMeta(tournamentId);
+  if (!meta.groupCount || !meta.playersPerGroup) {
+    showNotif('Set group count and players per group first', 'error');
+    return;
+  }
+  const groupMap = getPlayersByGroup(tournamentId, meta);
+  const groups = Object.keys(groupMap);
+  if (!groups.length) {
+    showNotif('No groups configured', 'error');
+    return;
+  }
+  for (const g of groups) {
+    if ((groupMap[g] || []).length < 2) {
+      showNotif(`Group ${g} needs at least 2 players`, 'error');
+      return;
+    }
+  }
+
+  ensureTournamentMatchesRoot(tournamentId);
+
+  // Undo snapshot (matches and meta)
+  const prevMatches = STATE.matches[tournamentId] ? JSON.parse(JSON.stringify(STATE.matches[tournamentId])) : {};
+  createUndoAction(async () => {
+    STATE.matches[tournamentId] = prevMatches;
+    await saveToFirebase(`ballandor/matches/${tournamentId}`, prevMatches);
+    updateTournamentStats(tournamentId);
+    renderTournamentDashboard(tournamentId);
+    renderBracketData(tournamentId);
+    showNotif('Group fixtures reverted', 'info');
+  });
+
+  // Clear existing group stage and knockout rounds (but keep meta)
+  Object.keys(STATE.matches[tournamentId]).forEach(k => {
+    if (k === MATCH_META_KEY) return;
+    delete STATE.matches[tournamentId][k];
+  });
+
+  STATE.matches[tournamentId][GROUP_ROUND_KEY] = {};
+  let idx = 0;
+  for (const g of groups.sort()) {
+    const pairs = generateRoundRobinPairs(groupMap[g]);
+    pairs.forEach(([p1, p2]) => {
+      const matchId = `g_${g}_${idx++}`;
+      STATE.matches[tournamentId][GROUP_ROUND_KEY][matchId] = {
+        id: matchId,
+        round: GROUP_ROUND_KEY,
+        group: g,
+        index: idx,
+        stage: 'Group Stage',
+        p1,
+        p2,
+        score1: null,
+        score2: null,
+        winner: null,
+        isBye: false
+      };
+    });
+  }
+
+  meta.stage = 'group';
+  await saveTournamentMeta(tournamentId, meta);
+  await saveToFirebase(`ballandor/matches/${tournamentId}/${GROUP_ROUND_KEY}`, STATE.matches[tournamentId][GROUP_ROUND_KEY]);
+
+  updateTournamentStats(tournamentId);
+  showNotif('✅ Group fixtures generated', 'success', { showUndo: true, undoLabel: 'Undo fixtures' });
+  renderBracketData(tournamentId);
+}
+
+function groupMatchCompleted(m) {
+  return m && m.p1 && m.p2 && m.score1 !== null && m.score2 !== null;
+}
+
+function computeGroupStandings(tournamentId, groupKey, meta) {
+  const groupMap = getPlayersByGroup(tournamentId, meta);
+  const groupPlayers = groupMap[groupKey] || [];
+  const stats = {};
+  groupPlayers.forEach(p => {
+    stats[p.id] = {
+      id: p.id,
+      name: p.name,
+      team: p.team,
+      mp: 0, w: 0, d: 0, l: 0, gf: 0, ga: 0, gd: 0, pts: 0,
+      _seed: groupPlayers.findIndex(x => x.id === p.id)
+    };
+  });
+
+  const matches = STATE.matches?.[tournamentId]?.[GROUP_ROUND_KEY] || {};
+  const h2h = {}; // h2h["p1|p2"] = {p1Pts, p2Pts, p1Gf, p2Gf}
+
+  Object.values(matches).forEach(m => {
+    if (m.group !== groupKey) return;
+    if (!groupMatchCompleted(m)) return;
+    if (!stats[m.p1] || !stats[m.p2]) return;
+
+    const a = stats[m.p1];
+    const b = stats[m.p2];
+    a.mp++; b.mp++;
+    a.gf += m.score1; a.ga += m.score2;
+    b.gf += m.score2; b.ga += m.score1;
+    a.gd = a.gf - a.ga;
+    b.gd = b.gf - b.ga;
+
+    let aPts = 0, bPts = 0;
+    if (m.score1 > m.score2) { a.w++; b.l++; aPts = 3; }
+    else if (m.score2 > m.score1) { b.w++; a.l++; bPts = 3; }
+    else { a.d++; b.d++; aPts = 1; bPts = 1; }
+    a.pts += aPts;
+    b.pts += bPts;
+
+    const key = m.p1 < m.p2 ? `${m.p1}|${m.p2}` : `${m.p2}|${m.p1}`;
+    if (!h2h[key]) h2h[key] = { a: 0, b: 0, aGf: 0, bGf: 0, aId: m.p1 < m.p2 ? m.p1 : m.p2, bId: m.p1 < m.p2 ? m.p2 : m.p1 };
+    const rec = h2h[key];
+    if (m.p1 === rec.aId) {
+      rec.a += aPts;
+      rec.b += bPts;
+      rec.aGf += m.score1;
+      rec.bGf += m.score2;
+    } else {
+      // swapped
+      rec.a += bPts;
+      rec.b += aPts;
+      rec.aGf += m.score2;
+      rec.bGf += m.score1;
+    }
+  });
+
+  const arr = Object.values(stats);
+  arr.sort((x, y) => {
+    if (y.pts !== x.pts) return y.pts - x.pts;
+    if (y.gd !== x.gd) return y.gd - x.gd;
+    if (y.gf !== x.gf) return y.gf - x.gf;
+
+    // Head-to-head (only meaningful in two-player tie)
+    const key = x.id < y.id ? `${x.id}|${y.id}` : `${y.id}|${x.id}`;
+    const rec = h2h[key];
+    if (rec) {
+      const xIsA = rec.aId === x.id;
+      const xPts = xIsA ? rec.a : rec.b;
+      const yPts = xIsA ? rec.b : rec.a;
+      if (xPts !== yPts) return yPts - xPts;
+    }
+    return x._seed - y._seed;
+  });
+  return arr;
+}
+
+function groupsComplete(tournamentId, meta) {
+  const matches = STATE.matches?.[tournamentId]?.[GROUP_ROUND_KEY] || {};
+  const groupMap = getPlayersByGroup(tournamentId, meta);
+  const neededGroups = Object.keys(groupMap).filter(g => (groupMap[g] || []).length >= 2);
+  if (!neededGroups.length) return false;
+
+  // For each group, ensure every pair match exists and is completed
+  for (const g of neededGroups) {
+    const players = groupMap[g];
+    const expectedCount = (players.length * (players.length - 1)) / 2;
+    const groupMatches = Object.values(matches).filter(m => m.group === g);
+    if (groupMatches.length < expectedCount) return false;
+    if (!groupMatches.every(groupMatchCompleted)) return false;
+  }
+  return true;
+}
+
+function buildQualifiedList(tournamentId, meta) {
+  const groupMap = getPlayersByGroup(tournamentId, meta);
+  const groups = Object.keys(groupMap).sort();
+  const qualified = [];
+  for (const g of groups) {
+    const standings = computeGroupStandings(tournamentId, g, meta);
+    const top2 = standings.slice(0, 2);
+    top2.forEach((row, idx) => {
+      qualified.push({ playerId: row.id, group: g, pos: idx + 1 });
+    });
+  }
+  return qualified;
+}
+
+function crossGroupSeedPairs(qualified) {
+  // qualified items include {playerId, group, pos} where pos 1/2
+  const groups = Array.from(new Set(qualified.map(q => q.group))).sort();
+  const winners = groups.map(g => qualified.find(q => q.group === g && q.pos === 1)).filter(Boolean);
+  const runners = groups.map(g => qualified.find(q => q.group === g && q.pos === 2)).filter(Boolean);
+
+  // Pair i winner vs next group's runner-up (cyclic), and next group's winner vs i runner-up.
+  const pairs = [];
+  for (let i = 0; i < groups.length; i++) {
+    const g = groups[i];
+    const next = groups[(i + 1) % groups.length];
+    const w = qualified.find(q => q.group === g && q.pos === 1);
+    const rNext = qualified.find(q => q.group === next && q.pos === 2);
+    const wNext = qualified.find(q => q.group === next && q.pos === 1);
+    const r = qualified.find(q => q.group === g && q.pos === 2);
+    if (w && rNext) pairs.push([w, rNext]);
+    if (wNext && r) pairs.push([wNext, r]);
+  }
+
+  // Deduplicate pairs (cyclic construction can repeat for 2 groups)
+  const seen = new Set();
+  const unique = [];
+  for (const [a, b] of pairs) {
+    const key = a.playerId < b.playerId ? `${a.playerId}|${b.playerId}` : `${b.playerId}|${a.playerId}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push([a, b]);
+  }
+  return unique;
+}
+
+async function generateKnockoutFromGroups(tournamentId) {
+  const meta = getTournamentMeta(tournamentId);
+  if (!groupsComplete(tournamentId, meta)) {
+    showNotif('Group stage is not complete yet', 'error');
+    return;
+  }
+  const qualified = buildQualifiedList(tournamentId, meta);
+  if (qualified.length < 2) {
+    showNotif('Not enough qualified players for knockout', 'error');
+    return;
+  }
+
+  // Snapshot for undo (full tournament matches)
+  const prevMatches = STATE.matches[tournamentId] ? JSON.parse(JSON.stringify(STATE.matches[tournamentId])) : {};
+  createUndoAction(async () => {
+    STATE.matches[tournamentId] = prevMatches;
+    await saveToFirebase(`ballandor/matches/${tournamentId}`, prevMatches);
+    updateTournamentStats(tournamentId);
+    renderTournamentDashboard(tournamentId);
+    renderBracketData(tournamentId);
+    showNotif('Knockout generation reverted', 'info');
+  });
+
+  const initialPairs = crossGroupSeedPairs(qualified);
+  // Flatten to list, then pad with BYEs to power of 2
+  const seededPlayers = [];
+  initialPairs.forEach(([a, b]) => {
+    seededPlayers.push(a.playerId);
+    seededPlayers.push(b.playerId);
+  });
+  // Add any qualified not placed yet (safety)
+  const placed = new Set(seededPlayers);
+  qualified.forEach(q => { if (!placed.has(q.playerId)) seededPlayers.push(q.playerId); });
+
+  const size = computeBracketSize(seededPlayers.length);
+  while (seededPlayers.length < size) seededPlayers.push('BYE');
+
+  const firstRoundMatches = pairParticipants(seededPlayers);
+  const totalRounds = Math.log2(size);
+
+  // Clear existing numeric rounds/3rd place; keep group stage and meta
+  Object.keys(STATE.matches[tournamentId]).forEach(k => {
+    if (k === MATCH_META_KEY || k === GROUP_ROUND_KEY) return;
+    delete STATE.matches[tournamentId][k];
+  });
+
+  // Round 0
   STATE.matches[tournamentId][0] = {};
-  for (let i = 0; i < initialMatches.length; i++) {
-    const m = initialMatches[i];
+  for (let i = 0; i < firstRoundMatches.length; i++) {
+    const m = firstRoundMatches[i];
     const isBye = m.p1 === 'BYE' || m.p2 === 'BYE';
     const matchId = `m_r0_${i}`;
     STATE.matches[tournamentId][0][matchId] = {
-      id: matchId, round: 0, index: i,
+      id: matchId,
+      round: 0,
+      index: i,
+      stage: 'Knockout',
       p1: m.p1 === 'BYE' ? null : m.p1,
       p2: m.p2 === 'BYE' ? null : m.p2,
-      score1: null, score2: null,
+      score1: null,
+      score2: null,
       winner: isBye ? (m.p1 === 'BYE' ? m.p2 : m.p1) : null,
       isBye
     };
   }
-  
-  // Initialize future empty rounds
+
+  // Future rounds
   for (let r = 1; r < totalRounds; r++) {
     STATE.matches[tournamentId][r] = {};
     const matchesInRound = size / Math.pow(2, r + 1);
@@ -2178,24 +2489,26 @@ async function generateKnockoutFixtures(tournamentId) {
       const matchId = `m_r${r}_${i}`;
       STATE.matches[tournamentId][r][matchId] = {
         id: matchId, round: r, index: i,
-        p1: null, p2: null, score1: null, score2: null, winner: null, isBye: false
+        p1: null, p2: null, score1: null, score2: null, winner: null, isBye: false, stage: 'Knockout'
       };
     }
   }
 
-  // Generate 3rd place match if needed
-  if (tConfig.hasFinal3rd) {
+  // Keep 3rd place if configured
+  const tConfig = TOURNAMENTS.find(t => t.id === tournamentId);
+  if (tConfig?.hasFinal3rd) {
     STATE.matches[tournamentId]['3rd_place'] = {
-      'm_3rd_0': { id: 'm_3rd_0', round: '3rd_place', index: 0, p1: null, p2: null, score1: null, score2: null, winner: null, isBye: false }
+      'm_3rd_0': { id: 'm_3rd_0', round: '3rd_place', index: 0, p1: null, p2: null, score1: null, score2: null, winner: null, isBye: false, stage: 'Knockout' }
     };
   }
 
+  meta.stage = 'knockout';
+  await saveTournamentMeta(tournamentId, meta);
   await saveToFirebase(`ballandor/matches/${tournamentId}`, STATE.matches[tournamentId]);
-  
-  // Resolve BYEs to propel players correctly into Round 1
-  await resolveByes(tournamentId);
 
-  showNotif('🎲 Fixtures generated successfully!', 'success');
+  await resolveByes(tournamentId);
+  updateTournamentStats(tournamentId);
+  showNotif('🏆 Knockout generated from groups', 'success', { showUndo: true, undoLabel: 'Undo KO' });
   renderBracketData(tournamentId);
 }
 
@@ -2261,6 +2574,45 @@ async function submitMatchResult(tournamentId, roundIndex, matchId, s1, s2) {
   }
 
   showNotif('Score saved!', 'success', { showUndo: true, undoLabel: 'Undo score' });
+  renderBracketData(tournamentId);
+}
+
+async function submitGroupMatchResult(tournamentId, matchId, s1, s2) {
+  if (AUTH.role !== 'admin') return;
+  const match = STATE.matches?.[tournamentId]?.[GROUP_ROUND_KEY]?.[matchId];
+  if (!match) return;
+  const score1 = parseInt(s1, 10);
+  const score2 = parseInt(s2, 10);
+  if (isNaN(score1) || isNaN(score2)) return showNotif('Invalid score', 'error');
+
+  const prev = JSON.parse(JSON.stringify(match));
+  createUndoAction(async () => {
+    STATE.matches[tournamentId][GROUP_ROUND_KEY][matchId] = prev;
+    await saveMatch(tournamentId, GROUP_ROUND_KEY, matchId, prev);
+    updateTournamentStats(tournamentId);
+    renderTournamentDashboard(tournamentId);
+    renderBracketData(tournamentId);
+    showNotif('Group score reverted', 'info');
+  });
+
+  match.score1 = score1;
+  match.score2 = score2;
+  // Winner stays null for draws in group stage
+  if (score1 > score2) match.winner = match.p1;
+  else if (score2 > score1) match.winner = match.p2;
+  else match.winner = null;
+
+  await saveMatch(tournamentId, GROUP_ROUND_KEY, matchId, match);
+  updateTournamentStats(tournamentId);
+
+  // Auto-generate knockout when groups finish (optional convenience)
+  const meta = getTournamentMeta(tournamentId);
+  if (groupsComplete(tournamentId, meta) && !Object.keys(STATE.matches?.[tournamentId] || {}).some(k => !isNaN(k))) {
+    // Only auto-generate if knockout not generated yet
+    await generateKnockoutFromGroups(tournamentId);
+  }
+
+  showNotif('Group match saved', 'success', { showUndo: true, undoLabel: 'Undo score' });
   renderBracketData(tournamentId);
 }
 
@@ -2334,6 +2686,17 @@ function openBracketModal(tournamentId) {
   const tConfig = TOURNAMENTS.find(t => t.id === tournamentId);
   document.getElementById('bracket-modal-title').innerHTML = `🏆 Manage Bracket: ${tConfig.name}`;
   openModal('bracket-modal');
+  // Sync group stage setup defaults
+  ensureTournamentMatchesRoot(tournamentId);
+  const meta = getTournamentMeta(tournamentId);
+  if (!meta.groupCount) meta.groupCount = parseInt(document.getElementById('gs-group-count')?.value || '4', 10);
+  if (!meta.playersPerGroup) meta.playersPerGroup = parseInt(document.getElementById('gs-players-per-group')?.value || '4', 10);
+  if (!meta.groups || !meta.assignments) {
+    const built = buildEmptyAssignments(tournamentId, meta.groupCount);
+    meta.groups = built.groups;
+    meta.assignments = built.assignments;
+  }
+  saveTournamentMeta(tournamentId, meta);
   renderBracketData(tournamentId);
 }
 
@@ -2423,8 +2786,13 @@ async function applyEditMatch() {
     if (score1 > score2) match.winner = p1Id;
     else if (score2 > score1) match.winner = p2Id;
     else {
-      showNotif('Matches cannot end in a tie. Please include penalty goals if tied.', 'error');
-      match.winner = null;
+      // Allow ties in group stage, forbid in knockout
+      if (roundIndex === GROUP_ROUND_KEY) {
+        match.winner = null;
+      } else {
+        showNotif('Matches cannot end in a tie. Please include penalty goals if tied.', 'error');
+        match.winner = null;
+      }
     }
   } else {
     match.winner = null;
@@ -2479,10 +2847,111 @@ function renderBracketData(tournamentId) {
     return;
   }
 
+  const meta = getTournamentMeta(tournamentId);
+  const groupCountEl = document.getElementById('gs-group-count');
+  const ppgEl = document.getElementById('gs-players-per-group');
+  if (groupCountEl && ppgEl && AUTH.role === 'admin') {
+    // Keep controls aligned with meta
+    if (meta.groupCount) groupCountEl.value = String(meta.groupCount);
+    if (meta.playersPerGroup) ppgEl.value = String(meta.playersPerGroup);
+  }
+
+  // Render group stage summary + matches if present
+  let groupHtml = '';
+  const groupMatches = matches[GROUP_ROUND_KEY] || null;
+  if (meta.groups && meta.groups.length) {
+    const groupMap = getPlayersByGroup(tournamentId, meta);
+    groupHtml += `<div class="card" style="padding:16px;">
+      <div class="card-title">🧩 Group Stage</div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px;">`;
+
+    meta.groups.forEach(g => {
+      const standings = computeGroupStandings(tournamentId, g, meta);
+      const rows = standings.map((r, i) => `<tr>
+        <td style="padding:6px 8px;white-space:nowrap;">${i + 1}</td>
+        <td style="padding:6px 8px;">${renderPlayerNameWithLogo(STATE.players[r.id])}</td>
+        <td style="padding:6px 8px;text-align:center;">${r.mp}</td>
+        <td style="padding:6px 8px;text-align:center;">${r.w}</td>
+        <td style="padding:6px 8px;text-align:center;">${r.d}</td>
+        <td style="padding:6px 8px;text-align:center;">${r.l}</td>
+        <td style="padding:6px 8px;text-align:center;">${r.gd > 0 ? '+' + r.gd : r.gd}</td>
+        <td style="padding:6px 8px;text-align:center;font-family:'Cinzel',serif;color:var(--gold);font-weight:700;">${r.pts}</td>
+      </tr>`).join('') || `<tr><td colspan="8" style="padding:10px;color:var(--text-secondary);">No players assigned</td></tr>`;
+
+      groupHtml += `<div style="border:1px solid var(--border-glass);border-radius:12px;overflow:hidden;background:rgba(255,255,255,0.02);">
+        <div style="padding:10px 12px;background:rgba(212,175,55,0.06);font-family:'Cinzel',serif;color:var(--gold);display:flex;justify-content:space-between;align-items:center;">
+          <span>Group ${g}</span>
+          <span style="font-size:11px;color:var(--text-secondary);">Qualify: top 2</span>
+        </div>
+        <div class="leaderboard-container">
+          <table class="leaderboard-table" style="font-size:12px;">
+            <thead>
+              <tr>
+                <th>#</th><th>Player</th><th>MP</th><th>W</th><th>D</th><th>L</th><th>GD</th><th>PTS</th>
+              </tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+      </div>`;
+    });
+
+    groupHtml += `</div>`;
+
+    if (groupMatches) {
+      const groupList = Object.values(groupMatches).sort((a,b) => (a.group || '').localeCompare(b.group || '') || (a.index || 0) - (b.index || 0));
+      groupHtml += `<div style="margin-top:14px;">
+        <div style="font-family:'Cinzel',serif;font-size:12px;color:var(--text-secondary);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;">
+          Group Fixtures
+        </div>
+        <div style="display:flex;flex-direction:column;gap:8px;">` +
+        groupList.map(m => {
+          const p1 = STATE.players[m.p1];
+          const p2 = STATE.players[m.p2];
+          const s1 = m.score1 !== null ? m.score1 : '';
+          const s2 = m.score2 !== null ? m.score2 : '';
+          return `<div class="bracket-match" style="padding:10px 12px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
+              <div style="min-width:120px;font-size:12px;color:var(--text-secondary);">Group ${esc(m.group || '?')}</div>
+              <div style="flex:1;display:flex;align-items:center;justify-content:space-between;gap:10px;">
+                <div style="flex:1;">${renderPlayerNameWithLogo(p1) || 'TBD'}</div>
+                <div style="display:flex;align-items:center;gap:8px;">
+                  <input type="number" class="admin-only bracket-score-input" id="gsc1_${m.id}" value="${s1}">
+                  <span style="color:var(--text-secondary);">-</span>
+                  <input type="number" class="admin-only bracket-score-input" id="gsc2_${m.id}" value="${s2}">
+                </div>
+                <div style="flex:1;text-align:right;">${renderPlayerNameWithLogo(p2) || 'TBD'}</div>
+              </div>
+            </div>
+            <div class="admin-only bracket-actions" style="padding:8px 0 0;">
+              <button class="btn btn-primary btn-sm" style="flex:1;" onclick="submitGroupMatchResult('${tournamentId}','${m.id}',document.getElementById('gsc1_${m.id}').value,document.getElementById('gsc2_${m.id}').value)">Save</button>
+              <button class="btn btn-secondary btn-sm" onclick="openEditMatch('${tournamentId}','${GROUP_ROUND_KEY}','${m.id}')">Edit Match</button>
+              <button class="btn btn-danger btn-sm" onclick="deleteMatch('${tournamentId}','${GROUP_ROUND_KEY}','${m.id}')">Delete</button>
+            </div>
+          </div>`;
+        }).join('') +
+        `</div></div>`;
+    } else {
+      groupHtml += `<div style="margin-top:10px;color:var(--text-secondary);font-size:13px;">No group fixtures generated yet.</div>`;
+    }
+
+    groupHtml += `</div>`;
+  }
+
   let html = `<div class="bracket-rounds-row">`;
   
   const numericRounds = Object.keys(matches).filter(k => !isNaN(k)).map(Number).sort((a,b)=>a-b);
   
+  // If no knockout yet, show only group stage
+  if (!numericRounds.length && !matches['3rd_place']) {
+    container.innerHTML = groupHtml || `<div class="empty-state">
+      <div class="empty-icon">🧩</div>
+      <div class="empty-title">Group Stage Not Set Up</div>
+      <div class="empty-desc">Configure groups and generate fixtures to begin.</div>
+    </div>`;
+    return;
+  }
+
   numericRounds.forEach(r => {
     const matchArray = Object.values(matches[r]).sort((a,b)=>a.index-b.index);
     html += `<div class="bracket-round-column">
@@ -2569,7 +3038,7 @@ function renderBracketData(tournamentId) {
   }
 
   html += `</div>`; // End flex display
-  container.innerHTML = html;
+  container.innerHTML = (groupHtml ? groupHtml + `<div style="height:16px;"></div>` : '') + html;
 
   // Read-only override for inputs if player
   if (AUTH.role === 'player') {
@@ -2581,10 +3050,23 @@ function renderBracketData(tournamentId) {
 // Global button handlers for Bracket Modal
 document.getElementById('btn-generate-bracket')?.addEventListener('click', async () => {
   if (!CURRENT_BRACKET_TID) return;
-  if(STATE.matches?.[CURRENT_BRACKET_TID]) {
-    if(!confirm('Bracket already exists. Generating it again will wipe all match results for this tournament. Continue?')) return;
+  if (AUTH.role !== 'admin') return;
+  const tid = CURRENT_BRACKET_TID;
+  const groupCount = parseInt(document.getElementById('gs-group-count')?.value || '4', 10);
+  const ppg = parseInt(document.getElementById('gs-players-per-group')?.value || '4', 10);
+
+  ensureTournamentMatchesRoot(tid);
+  const meta = getTournamentMeta(tid);
+  meta.groupCount = groupCount;
+  meta.playersPerGroup = ppg;
+  // If no assignments yet, do a random draw by default
+  if (!meta.assignments || !meta.groups) {
+    const draw = randomizeGroupAssignments(tid, groupCount, ppg);
+    meta.groups = draw.groups;
+    meta.assignments = draw.assignments;
   }
-  await generateKnockoutFixtures(CURRENT_BRACKET_TID);
+  await saveTournamentMeta(tid, meta);
+  await generateGroupFixtures(tid);
 });
 
 document.getElementById('btn-clear-bracket')?.addEventListener('click', async () => {
@@ -2620,4 +3102,74 @@ document.getElementById('btn-clear-bracket')?.addEventListener('click', async ()
   renderBracketData(tid);
   renderTournamentDashboard(tid);
   showNotif('Tournament cleared', 'info', { showUndo: true, undoLabel: 'Undo reset' });
+});
+
+// Group stage controls
+document.getElementById('btn-gs-random')?.addEventListener('click', async () => {
+  if (AUTH.role !== 'admin') return;
+  if (!CURRENT_BRACKET_TID) return;
+  const tid = CURRENT_BRACKET_TID;
+  const groupCount = parseInt(document.getElementById('gs-group-count')?.value || '4', 10);
+  const ppg = parseInt(document.getElementById('gs-players-per-group')?.value || '4', 10);
+  const meta = getTournamentMeta(tid);
+  const prevMeta = JSON.parse(JSON.stringify(meta || {}));
+
+  createUndoAction(async () => {
+    await saveTournamentMeta(tid, prevMeta);
+    renderBracketData(tid);
+    showNotif('Group draw reverted', 'info');
+  });
+
+  const draw = randomizeGroupAssignments(tid, groupCount, ppg);
+  meta.groupCount = groupCount;
+  meta.playersPerGroup = ppg;
+  meta.groups = draw.groups;
+  meta.assignments = draw.assignments;
+  meta.stage = 'group';
+  await saveTournamentMeta(tid, meta);
+  showNotif('Random draw complete', 'success', { showUndo: true, undoLabel: 'Undo draw' });
+  renderBracketData(tid);
+});
+
+document.getElementById('btn-gs-manual')?.addEventListener('click', async () => {
+  if (AUTH.role !== 'admin') return;
+  if (!CURRENT_BRACKET_TID) return;
+  const tid = CURRENT_BRACKET_TID;
+  const groupCount = parseInt(document.getElementById('gs-group-count')?.value || '4', 10);
+  const ppg = parseInt(document.getElementById('gs-players-per-group')?.value || '4', 10);
+  const meta = getTournamentMeta(tid);
+  meta.groupCount = groupCount;
+  meta.playersPerGroup = ppg;
+  if (!meta.groups || meta.groups.length !== groupCount) meta.groups = Array.from({ length: groupCount }, (_, i) => groupLetter(i));
+  if (!meta.assignments) {
+    const built = buildEmptyAssignments(tid, groupCount);
+    meta.assignments = built.assignments;
+  }
+  await saveTournamentMeta(tid, meta);
+  showNotif('Manual mode ready. Edit assignments in Firebase meta if needed (UI assignment panel coming next).', 'info');
+  renderBracketData(tid);
+});
+
+document.getElementById('btn-gs-generate')?.addEventListener('click', async () => {
+  if (AUTH.role !== 'admin') return;
+  if (!CURRENT_BRACKET_TID) return;
+  const tid = CURRENT_BRACKET_TID;
+  const groupCount = parseInt(document.getElementById('gs-group-count')?.value || '4', 10);
+  const ppg = parseInt(document.getElementById('gs-players-per-group')?.value || '4', 10);
+  const meta = getTournamentMeta(tid);
+  meta.groupCount = groupCount;
+  meta.playersPerGroup = ppg;
+  if (!meta.assignments || !meta.groups) {
+    const draw = randomizeGroupAssignments(tid, groupCount, ppg);
+    meta.groups = draw.groups;
+    meta.assignments = draw.assignments;
+  }
+  await saveTournamentMeta(tid, meta);
+  await generateGroupFixtures(tid);
+});
+
+document.getElementById('btn-gs-generate-ko')?.addEventListener('click', async () => {
+  if (AUTH.role !== 'admin') return;
+  if (!CURRENT_BRACKET_TID) return;
+  await generateKnockoutFromGroups(CURRENT_BRACKET_TID);
 });

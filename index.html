@@ -675,9 +675,44 @@
       <button class="modal-close" data-close="bracket-modal">✕</button>
     </div>
     <div class="modal-body">
-      <div id="bracket-controls" class="admin-only" style="margin-bottom:20px;display:flex;gap:10px;">
-        <button class="btn btn-primary" id="btn-generate-bracket">🎲 Generate Fixtures</button>
-        <button class="btn btn-danger" id="btn-clear-bracket">🧹 Clear Tournament</button>
+      <div id="bracket-controls" class="admin-only" style="margin-bottom:20px;display:flex;flex-direction:column;gap:12px;">
+        <div style="display:flex;gap:10px;flex-wrap:wrap;">
+          <button class="btn btn-primary" id="btn-generate-bracket">🎲 Generate Fixtures</button>
+          <button class="btn btn-danger" id="btn-clear-bracket">🧹 Clear Tournament</button>
+        </div>
+
+        <div class="card" style="padding:16px;margin:0;">
+          <div class="card-title">🧩 Group Stage Setup</div>
+          <div class="form-row">
+            <div class="form-group" style="margin-bottom:0;">
+              <label class="form-label">Number of Groups</label>
+              <select class="form-select" id="gs-group-count">
+                <option value="1">1</option>
+                <option value="2">2</option>
+                <option value="3">3</option>
+                <option value="4" selected>4</option>
+                <option value="5">5</option>
+                <option value="6">6</option>
+                <option value="7">7</option>
+                <option value="8">8</option>
+              </select>
+            </div>
+            <div class="form-group" style="margin-bottom:0;">
+              <label class="form-label">Players per Group</label>
+              <input class="form-input" id="gs-players-per-group" type="number" min="2" max="12" value="4" />
+            </div>
+          </div>
+
+          <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:12px;">
+            <button class="btn btn-secondary btn-sm" id="btn-gs-random">🎲 Random Draw</button>
+            <button class="btn btn-secondary btn-sm" id="btn-gs-manual">✋ Manual Assign</button>
+            <button class="btn btn-primary btn-sm" id="btn-gs-generate">📅 Generate Group Fixtures</button>
+            <button class="btn btn-secondary btn-sm" id="btn-gs-generate-ko" title="Generates knockout once groups complete">🏆 Generate Knockout</button>
+          </div>
+          <div class="form-hint" style="margin-top:10px;">
+            Group stage is round-robin (everyone plays everyone once). Top 2 in each group qualify to knockout.
+          </div>
+        </div>
       </div>
       <div id="bracket-container" style="display:flex; flex-direction:column; gap:30px; overflow-x:auto;">
         <!-- Rounds injected here by JS -->
