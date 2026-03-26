@@ -236,6 +236,7 @@
     <!-- Live Leaderboard -->
     <div class="card">
       <div class="card-title">🥇 Live Ballandor Leaderboard</div>
+      <div id="dashboard-podium" class="dashboard-podium"></div>
       <div class="leaderboard-container">
         <table class="leaderboard-table">
           <thead>
@@ -276,9 +277,9 @@
     <div class="card admin-only">
       <div class="card-title">📋 Bulk Add Players</div>
       <div class="form-group">
-        <label class="form-label">Enter player names and teams (format: Name - Team)</label>
-        <textarea class="form-input" id="bulk-textarea" rows="6" placeholder="Player 1 - Real Madrid&#10;Player 2 - Barcelona&#10;Player 3 - Man City&#10;…"></textarea>
-        <div class="form-hint">Enter one player per line. If no team is provided, it defaults to "Free Agent". Max 36 players.</div>
+        <label class="form-label">Enter players (format: Name - Team - Type - LogoURL)</label>
+        <textarea class="form-input" id="bulk-textarea" rows="6" placeholder="Player 1 - Real Madrid - club - https://logo...&#10;Player 2 - Barcelona - club&#10;Player 3 - Man City&#10;…"></textarea>
+        <div class="form-hint">Enter one player per line. Default type is club. Max 36 players.</div>
       </div>
       <button class="btn btn-primary" id="bulk-add-btn">➕ Add All</button>
     </div>

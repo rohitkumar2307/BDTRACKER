@@ -597,7 +597,7 @@ async function saveToFirebase(path, value) {
 }
 
 // ─── PLAYER MANAGEMENT ───────────────────────────────────────────────
-function addPlayer(name, team = "") {
+function addPlayer(name, team = "", explicitType = "", explicitLogo = "") {
   name = name.trim();
   team = team.trim() || "Free Agent";
   if (!name) return showNotif('Enter a player name', 'error');
@@ -609,13 +609,13 @@ function addPlayer(name, team = "") {
   }
   const id = 'p_' + Date.now() + '_' + Math.random().toString(36).slice(2,6);
   // If advanced player fields have been captured in the form, read them; otherwise fall back to defaults.
-  let teamType = 'club';
-  let logo = '';
+  let teamType = explicitType || 'club';
+  let logo = explicitLogo || '';
   try {
     const ttEl = document.getElementById('new-player-team-type');
     const logoEl = document.getElementById('new-player-logo');
-    if (ttEl && ttEl.value) teamType = ttEl.value;
-    if (logoEl && logoEl.value) logo = logoEl.value.trim();
+    if (ttEl && ttEl.value && !explicitType) teamType = ttEl.value;
+    if (logoEl && logoEl.value && !explicitLogo) logo = logoEl.value.trim();
   } catch(e) {}
   STATE.players[id] = { id, name, team, teamType, logo };
   saveToFirebase('ballandor/players', STATE.players);
@@ -796,25 +796,57 @@ function renderDashboard() {
       " title="${t.name}">${t.roman} ${t.icon}</div>`;
   }).join('');
 
-  // Leaderboard
+  // Podium & Leaderboard Split
+  const podiumEl = document.getElementById('dashboard-podium');
   const body = document.getElementById('leaderboard-body');
+  
   if (!ranked.length) {
+    podiumEl.style.display = 'none';
     body.innerHTML = `<tr><td colspan="7"><div class="empty-state"><div class="empty-icon">⚽</div><div class="empty-title">No data yet</div><div class="empty-desc">Add players and register tournament results</div></div></td></tr>`;
     return;
   }
-  body.innerHTML = ranked.map((p, i) => {
-    const rankClass = i === 0 ? 'rank-1' : i === 1 ? 'rank-2' : i === 2 ? 'rank-3' : 'rank-other';
-    const nameCell = renderPlayerNameWithLogo(p);
-    return `<tr>
-      <td><span class="rank-badge ${rankClass}">${i+1}</span></td>
-      <td class="player-name-cell">${nameCell}</td>
-      <td style="color:var(--text-secondary);font-size:12px;">${esc(p.team || 'Free Agent')}</td>
-      <td class="points-cell">${p.tournamentPts}</td>
-      <td class="points-cell">${p.sessionPts}</td>
-      <td class="points-cell">${p.votingPts}</td>
-      <td class="points-cell total">${p.total}</td>
-    </tr>`;
+  
+  // Render Top 3 in Podium
+  podiumEl.style.display = 'flex';
+  const podiumData = [
+    ranked[1] || null, // 2nd (Silver)
+    ranked[0] || null, // 1st (Gold)
+    ranked[2] || null  // 3rd (Bronze)
+  ];
+  
+  const ranksForPodium = [2, 1, 3];
+  const medals = ['🥈', '🥇', '🥉'];
+  const classes = ['silver', 'gold', 'bronze'];
+  
+  podiumEl.innerHTML = podiumData.map((p, idx) => {
+    if (!p) return `<div class="dash-podium-slot empty ${classes[idx]}"><div class="dash-podium-block">${ranksForPodium[idx]}</div></div>`;
+    return `<div class="dash-podium-slot ${classes[idx]}">
+      <div class="dash-avatar">${medals[idx]}</div>
+      <div class="dash-name">${renderPlayerNameWithLogo(p)}</div>
+      <div class="dash-pts">${p.total} pts</div>
+      <div class="dash-podium-block block-${ranksForPodium[idx]}">${ranksForPodium[idx]}</div>
+    </div>`;
   }).join('');
+
+  // Render 4th+ in Table
+  const others = ranked.slice(3);
+  if (!others.length) {
+    body.innerHTML = `<tr><td colspan="7" class="empty-state" style="padding:20px;">No other players</td></tr>`;
+  } else {
+    body.innerHTML = others.map((p, i) => {
+      const actualRank = i + 4;
+      const nameCell = renderPlayerNameWithLogo(p);
+      return `<tr>
+        <td><span class="rank-badge rank-other">${actualRank}</span></td>
+        <td class="player-name-cell">${nameCell}</td>
+        <td style="color:var(--text-secondary);font-size:12px;">${esc(p.team || 'Free Agent')}</td>
+        <td class="points-cell">${p.tournamentPts}</td>
+        <td class="points-cell">${p.sessionPts}</td>
+        <td class="points-cell">${p.votingPts}</td>
+        <td class="points-cell total">${p.total}</td>
+      </tr>`;
+    }).join('');
+  }
 }
 
 function renderPlayers() {
@@ -872,7 +904,13 @@ function renderTournaments() {
       .map(([pos, pts]) => `<span class="t-points-badge${pos==='1'?' gold':''}">P${pos}: ${pts}</span>`)
       .join('');
 
-    const winnerName = result?.positions?.[1] ? (STATE.players[result.positions[1]]?.name || 'Unknown') : null;
+    const winnerId = result?.positions?.[1];
+    const winnerName = winnerId ? (STATE.players[winnerId]?.name || 'Unknown') : null;
+    const top2Id = result?.positions?.[2];
+    const top3Id = result?.positions?.[3];
+    const topNames = [winnerId, top2Id, top3Id].filter(Boolean).map(pid => STATE.players[pid]).filter(Boolean);
+    const link = result?.link || '';
+    const hasLink = !!link;
 
     return `<div class="tournament-card${!isAvailable?' locked':''}" id="tc-${t.id}">
       <div class="t-header">
@@ -886,20 +924,28 @@ function renderTournaments() {
       <div class="t-body">
         ${specialTag ? `<div style="margin-bottom:10px;">${specialTag}</div>` : ''}
         <div class="t-points-row">${ptsDisplay}</div>
-        ${winnerName ? `<div style="margin-top:6px;font-size:12px;color:var(--gold);">🏆 Winner: <strong>${esc(winnerName)}</strong></div>` : ''}
-        <div style="display:flex;gap:8px;">
-          <button class="t-action-btn" onclick="openTournamentDashboard('${t.id}')"
-            ${!isAvailable?'disabled':''}>
-            📊 Dashboard
+        ${winnerName ? `<div class="t-topline">Winner: <strong>${renderPlayerNameWithLogo(STATE.players[winnerId])}</strong></div>` : `<div class="t-topline" style="color:var(--text-secondary);">No result yet</div>`}
+        ${topNames.length > 1 ? `<div class="t-topline muted">Top: ${topNames.map(p => renderPlayerNameWithLogo(p)).join(' · ')}</div>` : ''}
+        <div class="t-actions">
+          <button class="t-action-btn" onclick="openTournamentDashboard('${t.id}')" ${!isAvailable?'disabled':''}>
+            View
           </button>
-          ${AUTH.role === 'admin' ? `<button class="t-action-btn admin-only" onclick="openBracketModal('${t.id}')"
-            ${!isAvailable?'disabled':''}>
-            🏆 Manage Bracket
+          <button class="t-action-btn" onclick="openTournamentLink('${t.id}')" ${!hasLink?'disabled':''} title="${hasLink ? esc(link) : 'Add a CopaFacil link in tournament results'}">
+            View Matches
+          </button>
+          ${AUTH.role === 'admin' ? `<button class="t-action-btn admin-only" onclick="openTournamentModal('${t.id}')" ${!isAvailable?'disabled':''}>
+            Enter Results
           </button>` : ''}
         </div>
       </div>
     </div>`;
   }).join('');
+}
+
+function openTournamentLink(tid) {
+  const link = STATE.results?.[tid]?.link;
+  if (!link) return showNotif('No CopaFacil link saved for this tournament', 'info');
+  try { window.open(link, '_blank', 'noopener'); } catch(e) { window.location.href = link; }
 }
 
 // ─── TOURNAMENT DASHBOARD ───────────────────────────────────────────
@@ -949,32 +995,84 @@ function closeTournamentDashboard() {
 function renderTournamentDashboard(tid) {
   if (CURRENT_TD_ID !== tid) return;
   const t = TOURNAMENTS.find(x => x.id === tid);
-  const stats = STATE.tournamentStats?.[tid] || {};
-  
-  // Calculate Standings
-  const participants = Object.keys(stats).map(pid => {
-    const p = STATE.players[pid] || { name: 'Unknown', team: '' };
-    const s = stats[pid];
-    return {
-      id: pid, name: p.name, team: p.team,
-      mp: s.matchesPlayed || 0,
-      w: s.wins || 0, d: s.draws || 0, l: s.losses || 0,
-      gf: s.goalsFor || 0, ga: s.goalsAgainst || 0,
-      gd: s.goalDifference || 0, pts: s.points || 0
-    };
-  });
+  const result = STATE.results?.[tid] || null;
 
-  // Sort: 1. Points, 2. GD, 3. GF
-  participants.sort((a,b) => {
-    if (b.pts !== a.pts) return b.pts - a.pts;
-    if (b.gd !== a.gd) return b.gd - a.gd;
-    return b.gf - a.gf;
-  });
+  // Hybrid mode: we only show final results (CopaFacil owns matches/brackets)
+  const standings = [];
+  if (result?.positions) {
+    Object.entries(result.positions).forEach(([pos, pid]) => {
+      const p = STATE.players[pid] || { id: pid, name: 'Unknown', team: '' };
+      standings.push({ pos: parseInt(pos, 10), id: pid, name: p.name, team: p.team, mp: 0, w: 0, d: 0, l: 0, gf: 0, ga: 0, gd: 0, pts: 0 });
+    });
+    standings.sort((a,b) => a.pos - b.pos);
+  }
 
-  renderTournamentPodium(participants);
-  renderTournamentStandings(participants);
-  renderTournamentMatchHistory(tid);
-  populateMatchEntryDropdowns(participants);
+  // Podium from final results (no match-based standings)
+  const podium = standings.slice(0, 3).map(x => ({
+    id: x.id,
+    name: x.name,
+    team: x.team,
+    pts: (TOURNAMENTS.find(tt => tt.id === tid)?.pts?.[x.pos] || 0)
+  }));
+  renderTournamentPodium(podium);
+
+  // Replace standings table with results list + full stats
+  const tbody = document.getElementById('td-standings-body');
+  if (!result?.positions) {
+    tbody.innerHTML = `<tr><td colspan="11" class="empty-state" style="padding:40px 0;">
+      <div class="empty-icon">🏆</div>
+      <div class="empty-title">No final result saved yet</div>
+      <div class="empty-desc">Admins: use "Enter Results" in the tournament card.</div>
+    </td></tr>`;
+  } else {
+    // Populate stats from STATE.tournamentStats
+    standings.forEach(x => {
+      const s = STATE.tournamentStats?.[tid]?.[x.id];
+      if (s) {
+        x.mp = s.matchesPlayed;
+        x.w = s.wins;
+        x.d = s.draws;
+        x.l = s.losses;
+        x.gf = s.goalsFor;
+        x.ga = s.goalsAgainst;
+        x.gd = s.goalDifference;
+        x.pts = s.points;
+      }
+    });
+
+    tbody.innerHTML = standings.map((p, i) => {
+      const playerObj = STATE.players[p.id];
+      const nameCell = renderPlayerNameWithLogo(playerObj);
+      const isUnknown = p.mp === 0 && p.w === 0 && p.l === 0;
+      return `<tr>
+        <td><span class="rank-badge ${i===0?'rank-1':i===1?'rank-2':i===2?'rank-3':'rank-other'}">${p.pos}</span></td>
+        <td class="player-name-cell">${nameCell}</td>
+        <td style="color:var(--text-secondary);font-size:12px;">${esc(playerObj?.team || '—')}</td>
+        <td>${isUnknown ? '—' : p.mp}</td>
+        <td>${isUnknown ? '—' : p.w}</td>
+        <td>${isUnknown ? '—' : p.d}</td>
+        <td>${isUnknown ? '—' : p.l}</td>
+        <td>${isUnknown ? '—' : p.gf}</td>
+        <td>${isUnknown ? '—' : p.ga}</td>
+        <td style="color:${p.gd > 0 ? '#4caf50' : p.gd < 0 ? '#f44336' : 'inherit'}">${isUnknown ? '—' : p.gd > 0 ? '+'+p.gd : p.gd}</td>
+        <td class="points-cell">${p.pts}</td>
+      </tr>`;
+    }).join('');
+  }
+
+  // Hide internal match UI and show external link
+  const matchHistory = document.getElementById('td-match-history');
+  if (matchHistory) {
+    matchHistory.innerHTML = `<div style="text-align:center;padding:20px;color:var(--text-secondary);font-size:13px;">
+      Matches are managed externally via CopaFacil.
+      ${result?.link ? `<div style="margin-top:10px;"><button class="btn btn-secondary btn-sm" onclick="openTournamentLink('${tid}')">View Matches</button></div>` : ''}
+    </div>`;
+  }
+  const stageEl = document.getElementById('td-match-stage');
+  if (stageEl) {
+    const recordCard = stageEl.closest('.card');
+    if (recordCard) recordCard.style.display = 'none';
+  }
 }
 
 function renderTournamentPodium(standings) {
@@ -1452,6 +1550,49 @@ function openTournamentModal(tid) {
     </div>`;
   }).join('');
 
+  // Player Stats Section
+  const participants = Object.keys(STATE.tournamentStats?.[tid] || {});
+  let statsHtml = '';
+  if (participants.length > 0) {
+    statsHtml = `<div class="form-group" style="margin-top:24px;">
+      <div class="form-label">📊 Player Stats</div>
+      <div style="font-size:11px;color:var(--text-secondary);margin-bottom:8px;">Enter stats for participants manually below.</div>
+      <div style="overflow-x:auto;">
+      <table class="breakdown-table" style="width:100%; text-align:center;">
+        <thead>
+          <tr>
+            <th style="text-align:left;">Player</th>
+            <th>MP</th><th>W</th><th>D</th><th>L</th><th>GF</th><th>GA</th><th>GD</th><th>Pts</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${participants.map(pid => {
+            const p = STATE.players[pid];
+            if (!p) return '';
+            const s = STATE.tournamentStats[tid]?.[pid] || { matchesPlayed:0, wins:0, draws:0, losses:0, goalsFor:0, goalsAgainst:0, goalDifference:0, points:0 };
+            return `<tr>
+              <td style="text-align:left; white-space:nowrap; font-size:12px;">${esc(p.name)}</td>
+              <td><input type="number" class="form-input ts-in" style="padding:4px; font-size:12px;" id="ts-mp-${pid}" value="${s.matchesPlayed}" min="0"/></td>
+              <td><input type="number" class="form-input ts-in" style="padding:4px; font-size:12px;" id="ts-w-${pid}" value="${s.wins}" min="0"/></td>
+              <td><input type="number" class="form-input ts-in" style="padding:4px; font-size:12px;" id="ts-d-${pid}" value="${s.draws}" min="0"/></td>
+              <td><input type="number" class="form-input ts-in" style="padding:4px; font-size:12px;" id="ts-l-${pid}" value="${s.losses}" min="0"/></td>
+              <td><input type="number" class="form-input ts-in" style="padding:4px; font-size:12px;" id="ts-gf-${pid}" value="${s.goalsFor}" min="0"/></td>
+              <td><input type="number" class="form-input ts-in" style="padding:4px; font-size:12px;" id="ts-ga-${pid}" value="${s.goalsAgainst}" min="0"/></td>
+              <td><input type="number" class="form-input ts-in" style="padding:4px; font-size:12px;" id="ts-gd-${pid}" value="${s.goalDifference}"/></td>
+              <td><input type="number" class="form-input ts-in" style="padding:4px; font-size:12px;" id="ts-pts-${pid}" value="${s.points}" min="0"/></td>
+            </tr>`;
+          }).join('')}
+        </tbody>
+      </table>
+      </div>
+    </div>`;
+  } else {
+    statsHtml = `<div class="form-group" style="margin-top:24px;">
+      <div class="form-label">📊 Player Stats</div>
+      <div class="form-hint">No participants added. Manage participants first to add stats.</div>
+    </div>`;
+  }
+
   // BA/BD (if tournament supports it)
   let babd = '';
   if (t.baPoints > 0) {
@@ -1487,15 +1628,22 @@ function openTournamentModal(tid) {
     </div>`;
   }
 
+  const curLink = existing.link || '';
   document.getElementById('t-modal-body').innerHTML = `
     ${infoMsg}
+    <div class="form-group">
+      <div class="form-label">🔗 CopaFacil Link (View Matches)</div>
+      <input class="form-input" id="t-link-${tid}" placeholder="https://…" value="${esc(curLink)}" />
+      <div class="form-hint">This app does not manage brackets. Paste the CopaFacil tournament link here.</div>
+    </div>
     <div class="form-group">
       <div class="form-label">🏆 Finishing Positions</div>
       <div class="position-slots">${posSlots}</div>
     </div>
+    ${statsHtml}
     ${babd}
     <div style="margin-top:20px;display:flex;gap:12px;flex-wrap:wrap;">
-      <button class="btn btn-primary" onclick="saveTournamentResult('${tid}',${maxSlots},${t.baPoints > 0})">💾 Save Result</button>
+      <button class="btn btn-primary" onclick="saveTournamentResult('${tid}',${maxSlots},${t.baPoints > 0})">💾 Save Result & Stats</button>
       ${existing.positions ? `<button class="btn btn-danger" onclick="clearTournamentResult('${tid}')">🗑️ Clear Result</button>` : ''}
       <button class="btn btn-secondary" data-close="tournament-modal">Cancel</button>
     </div>
@@ -1505,6 +1653,7 @@ function openTournamentModal(tid) {
 }
 
 function saveTournamentResult(tid, slots, hasBABD) {
+  const prev = STATE.results?.[tid] ? JSON.parse(JSON.stringify(STATE.results[tid])) : null;
   const positions = {};
   let valid = true;
   const used = new Set();
@@ -1528,6 +1677,8 @@ function saveTournamentResult(tid, slots, hasBABD) {
   }
 
   const result = { positions };
+  const linkVal = document.getElementById(`t-link-${tid}`)?.value?.trim() || '';
+  if (linkVal) result.link = linkVal;
 
   if (hasBABD) {
     const ba = [0,1,2].map(i => document.getElementById(`ba-${tid}-${i}`)?.value || null).filter(Boolean);
@@ -1537,10 +1688,41 @@ function saveTournamentResult(tid, slots, hasBABD) {
   }
 
   if (!STATE.results) STATE.results = {};
+  // Preserve existing link if user leaves it blank
+  if (!result.link && prev?.link) result.link = prev.link;
   STATE.results[tid] = result;
   saveToFirebase('ballandor/results', STATE.results);
+
+  // Read and save player stats
+  const participants = Object.keys(STATE.tournamentStats?.[tid] || {});
+  if (participants.length > 0) {
+    if (!STATE.tournamentStats) STATE.tournamentStats = {};
+    if (!STATE.tournamentStats[tid]) STATE.tournamentStats[tid] = {};
+    participants.forEach(pid => {
+      STATE.tournamentStats[tid][pid] = {
+        matchesPlayed: parseInt(document.getElementById(`ts-mp-${pid}`)?.value || 0),
+        wins: parseInt(document.getElementById(`ts-w-${pid}`)?.value || 0),
+        draws: parseInt(document.getElementById(`ts-d-${pid}`)?.value || 0),
+        losses: parseInt(document.getElementById(`ts-l-${pid}`)?.value || 0),
+        goalsFor: parseInt(document.getElementById(`ts-gf-${pid}`)?.value || 0),
+        goalsAgainst: parseInt(document.getElementById(`ts-ga-${pid}`)?.value || 0),
+        goalDifference: parseInt(document.getElementById(`ts-gd-${pid}`)?.value || 0),
+        points: parseInt(document.getElementById(`ts-pts-${pid}`)?.value || 0)
+      };
+    });
+    saveToFirebase(`ballandor/tournamentStats/${tid}`, STATE.tournamentStats[tid]);
+  }
+
   closeModal('tournament-modal');
-  showNotif('✅ Tournament result saved!', 'success');
+  createUndoAction(async () => {
+    if (!STATE.results) STATE.results = {};
+    if (prev) STATE.results[tid] = prev;
+    else delete STATE.results[tid];
+    await saveToFirebase('ballandor/results', STATE.results);
+    renderAll();
+    showNotif('Tournament result reverted', 'info');
+  });
+  showNotif('✅ Tournament result saved!', 'success', { showUndo: true, undoLabel: 'Undo result' });
   renderAll();
 }
 
@@ -1929,14 +2111,18 @@ document.addEventListener('DOMContentLoaded', () => {
     lines.forEach(line => {
       let name = line.trim();
       let team = "";
+      let type = "club";
+      let logo = "";
       if (!name) return;
       if (name.includes('-')) {
-        const parts = name.split('-');
-        name = parts[0].trim();
-        team = parts.slice(1).join('-').trim();
+        const parts = name.split('-').map(s => s.trim());
+        name = parts[0] || "";
+        team = parts[1] || "Free Agent";
+        if (parts[2]) type = parts[2].toLowerCase() === 'national' ? 'national' : 'club';
+        if (parts[3]) logo = parts[3];
       }
       const before = Object.keys(STATE.players).length;
-      addPlayer(name, team);
+      addPlayer(name, team, type, logo);
       if (Object.keys(STATE.players).length > before) added++;
     });
     document.getElementById('bulk-textarea').value = '';
