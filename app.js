@@ -602,7 +602,7 @@ function addPlayer(name, team = "", explicitType = "", explicitLogo = "") {
   team = team.trim() || "Free Agent";
   if (!name) return showNotif('Enter a player name', 'error');
   const count = Object.keys(STATE.players).length;
-  if (count >= 36) return showNotif('Maximum 36 players allowed', 'error');
+  if (count >= 64) return showNotif('Maximum 64 players allowed', 'error');
   // Check duplicate
   if (Object.values(STATE.players).some(p => p.name.toLowerCase() === name.toLowerCase())) {
     return showNotif(`"${name}" is already registered`, 'error');
@@ -771,6 +771,40 @@ function renderAll() {
   renderVoting();
 }
 
+function getInsightStats() {
+  const players = STATE.players || {};
+  let inForm = null, topScorer = null, bestDef = null;
+
+  // Most In-Form (won last played tournament)
+  for (let i = TOURNAMENTS.length - 1; i >= 0; i--) {
+    const res = STATE.results?.[TOURNAMENTS[i].id];
+    if (res?.positions) {
+      const winnerId = Object.entries(res.positions).find(([, pid]) => parseInt(pid) === 1)?.[0];
+      if (winnerId && players[winnerId]) inForm = { name: players[winnerId].name };
+      break;
+    }
+  }
+
+  // Aggregate Stats
+  let maxGf = -1;
+  let minRatio = Infinity;
+  for (const pid of Object.keys(players)) {
+    let tGf = 0, tGa = 0, tMp = 0;
+    for (const tid of Object.keys(STATE.tournamentStats || {})) {
+      const s = STATE.tournamentStats[tid][pid];
+      if (s) {
+        tGf += s.gf; tGa += s.ga; tMp += s.matchesPlayed;
+      }
+    }
+    if (tGf > maxGf && tGf > 0) { maxGf = tGf; topScorer = { name: players[pid].name, gf: tGf }; }
+    if (tMp > 0) {
+      const ratio = tGa / tMp;
+      if (ratio < minRatio && tMp >= 3) { minRatio = ratio; bestDef = { name: players[pid].name, ratio }; }
+    }
+  }
+  return { inForm, topScorer, bestDef };
+}
+
 function renderDashboard() {
   const players = getPlayersArray();
   const ranked = getRankedPlayers();
@@ -820,13 +854,37 @@ function renderDashboard() {
   
   podiumEl.innerHTML = podiumData.map((p, idx) => {
     if (!p) return `<div class="dash-podium-slot empty ${classes[idx]}"><div class="dash-podium-block">${ranksForPodium[idx]}</div></div>`;
-    return `<div class="dash-podium-slot ${classes[idx]}">
+    return `<div class="dash-podium-slot ${classes[idx]}" onclick="openPlayerProfile('${p.id}')" style="cursor:pointer;">
       <div class="dash-avatar">${medals[idx]}</div>
       <div class="dash-name">${renderPlayerNameWithLogo(p)}</div>
       <div class="dash-pts">${p.total} pts</div>
       <div class="dash-podium-block block-${ranksForPodium[idx]}">${ranksForPodium[idx]}</div>
     </div>`;
   }).join('');
+
+  // Insight bar below podium
+  const insights = getInsightStats();
+  let insightEl = document.getElementById('dashboard-insights');
+  if (!insightEl) {
+    insightEl = document.createElement('div');
+    insightEl.id = 'dashboard-insights';
+    insightEl.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:14px;margin:20px 0 0;';
+    podiumEl.parentNode.insertBefore(insightEl, podiumEl.nextSibling);
+  }
+  const insightCards = [
+    insights.inForm ? { icon: '🔥', label: 'Most In-Form', value: insights.inForm.name, sub: `Won last tournament` } : null,
+    insights.topScorer ? { icon: '🎯', label: 'Top Scorer', value: insights.topScorer.name, sub: `${insights.topScorer.gf} goals scored` } : null,
+    insights.bestDef ? { icon: '🧱', label: 'Best Defence', value: insights.bestDef.name, sub: `${insights.bestDef.ratio.toFixed(1)} GA/match` } : null,
+  ].filter(Boolean);
+  insightEl.innerHTML = insightCards.map(c => `
+    <div class="insight-card">
+      <div class="insight-icon">${c.icon}</div>
+      <div>
+        <div class="insight-label">${c.label}</div>
+        <div class="insight-value">${esc(c.value)}</div>
+        <div class="insight-sub">${c.sub}</div>
+      </div>
+    </div>`).join('');
 
   // Render 4th+ in Table
   const others = ranked.slice(3);
@@ -836,7 +894,7 @@ function renderDashboard() {
     body.innerHTML = others.map((p, i) => {
       const actualRank = i + 4;
       const nameCell = renderPlayerNameWithLogo(p);
-      return `<tr>
+      return `<tr onclick="openPlayerProfile('${p.id}')">
         <td><span class="rank-badge rank-other">${actualRank}</span></td>
         <td class="player-name-cell">${nameCell}</td>
         <td style="color:var(--text-secondary);font-size:12px;">${esc(p.team || 'Free Agent')}</td>
@@ -849,16 +907,185 @@ function renderDashboard() {
   }
 }
 
+// ─── PLAYER PROFILE ──────────────────────────────────────────────────
+function openPlayerProfile(playerId) {
+  const p = STATE.players[playerId];
+  if (!p) return;
+
+  const tPts = computeTournamentPoints(playerId);
+  const sPts = computeSessionPoints(playerId);
+  const vPts = computeVotingPoints(playerId);
+  const total = tPts + sPts + vPts;
+
+  // Tournament history
+  let bestFinish = null;
+  const histRows = TOURNAMENTS.map(t => {
+    const result = STATE.results?.[t.id];
+    if (!result?.positions) return null;
+    const pos = Object.entries(result.positions).find(([, pid]) => pid === playerId)?.[0];
+    if (!pos) return null;
+    const posNum = parseInt(pos);
+    if (bestFinish === null || posNum < bestFinish) bestFinish = posNum;
+    return `<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.04);font-size:13px;"
+      ><span style="color:var(--text-secondary);">${t.roman}. ${t.icon} ${esc(t.name)}</span
+      ><span style="font-weight:600;color:${posNum===1?'var(--gold)':posNum<=3?'#cd7f32':'var(--text-primary)'};"
+      >${posNum === 1 ? '🥇 1st' : posNum === 2 ? '🥈 2nd' : posNum === 3 ? '🥉 3rd' : `${posNum}th`}</span
+    ></div>`;
+  }).filter(Boolean);
+
+  // BA/BD awards
+  const baWins = [], bdWins = [];
+  for (const [tid, result] of Object.entries(STATE.results || {})) {
+    const t = TOURNAMENTS.find(x => x.id === tid);
+    if (!t) continue;
+    if (result.ba?.[0] === playerId) baWins.push(`🥇 ${t.roman}`);
+    else if (result.ba?.[1] === playerId) baWins.push(`🥈 ${t.roman}`);
+    else if (result.ba?.[2] === playerId) baWins.push(`🥉 ${t.roman}`);
+    if (result.bd?.[0] === playerId) bdWins.push(`🥇 ${t.roman}`);
+    else if (result.bd?.[1] === playerId) bdWins.push(`🥈 ${t.roman}`);
+    else if (result.bd?.[2] === playerId) bdWins.push(`🥉 ${t.roman}`);
+  }
+
+  const logo = getPlayerLogoImg(p, '');
+  const bestFinishStr = bestFinish === null ? 'No results' : bestFinish === 1 ? '🥇 Winner' : bestFinish === 2 ? '🥈 Runner-up' : bestFinish === 3 ? '🥉 3rd Place' : `${bestFinish}th`;
+
+  document.getElementById('player-profile-body').innerHTML = `
+    <div style="display:flex;align-items:center;gap:20px;margin-bottom:24px;">
+      <div style="width:64px;height:64px;border-radius:16px;background:rgba(226,192,68,0.15);border:1px solid rgba(226,192,68,0.3);display:flex;align-items:center;justify-content:center;font-size:28px;flex-shrink:0;">
+        ${logo || '👤'}
+      </div>
+      <div>
+        <div style="font-family:'Inter',sans-serif;font-size:22px;font-weight:700;color:var(--text-primary);">${esc(p.name)}</div>
+        <div style="font-size:13px;color:var(--text-secondary);margin-top:4px;">${esc(p.team || 'Free Agent')}</div>
+        <div style="font-size:12px;color:var(--gold);margin-top:6px;font-weight:600;">${bestFinishStr}</div>
+      </div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:24px;">
+      <div style="background:rgba(226,192,68,0.08);border:1px solid rgba(226,192,68,0.2);border-radius:12px;padding:14px;text-align:center;">
+        <div style="font-size:22px;font-weight:700;color:var(--gold);">${total}</div>
+        <div style="font-size:11px;color:var(--text-secondary);margin-top:4px;">Total Pts</div>
+      </div>
+      <div style="background:rgba(255,255,255,0.03);border:1px solid var(--border-glass);border-radius:12px;padding:14px;text-align:center;">
+        <div style="font-size:22px;font-weight:700;color:var(--text-primary);">${tPts}</div>
+        <div style="font-size:11px;color:var(--text-secondary);margin-top:4px;">Tournament</div>
+      </div>
+      <div style="background:rgba(255,255,255,0.03);border:1px solid var(--border-glass);border-radius:12px;padding:14px;text-align:center;">
+        <div style="font-size:22px;font-weight:700;color:var(--text-primary);">${vPts}</div>
+        <div style="font-size:11px;color:var(--text-secondary);margin-top:4px;">Voting</div>
+      </div>
+    </div>
+
+    ${histRows.length ? `
+    <div style="margin-bottom:20px;">
+      <div style="font-size:12px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:1px;margin-bottom:12px;">Tournament History</div>
+      ${histRows.join('')}
+    </div>` : ''}
+
+    ${baWins.length || bdWins.length ? `
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+      ${baWins.length ? `<div style="background:rgba(255,255,255,0.03);border:1px solid var(--border-glass);border-radius:12px;padding:14px;">
+        <div style="font-size:11px;color:var(--gold);font-weight:600;text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;">🥾 Best Attack</div>
+        ${baWins.map(w => `<div style="font-size:13px;color:var(--text-primary);padding:3px 0;">${w}</div>`).join('')}
+      </div>` : ''}
+      ${bdWins.length ? `<div style="background:rgba(255,255,255,0.03);border:1px solid var(--border-glass);border-radius:12px;padding:14px;">
+        <div style="font-size:11px;color:var(--gold);font-weight:600;text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;">🛡️ Best Defence</div>
+        ${bdWins.map(w => `<div style="font-size:13px;color:var(--text-primary);padding:3px 0;">${w}</div>`).join('')}
+      </div>` : ''}
+    </div>` : ''}
+  `;
+  openModal('player-profile-modal');
+}
+
+// ─── H2H COMPARISON ──────────────────────────────────────────────────
+function openH2H() {
+  const opts = `<option value="">— Select —</option>` +
+    getPlayersArray().map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('');
+  document.getElementById('h2h-p1').innerHTML = opts;
+  document.getElementById('h2h-p2').innerHTML = opts;
+  document.getElementById('h2h-result').innerHTML = '';
+  openModal('h2h-modal');
+}
+
+function renderH2H() {
+  const p1id = document.getElementById('h2h-p1').value;
+  const p2id = document.getElementById('h2h-p2').value;
+  const out = document.getElementById('h2h-result');
+  if (!p1id || !p2id || p1id === p2id) {
+    out.innerHTML = '<div class="empty-state"><div class="empty-icon">⚔️</div><div class="empty-title">Select two different players</div></div>';
+    return;
+  }
+  const p1 = STATE.players[p1id], p2 = STATE.players[p2id];
+  const rows = [];
+  let p1Wins = 0, p2Wins = 0;
+  for (const t of TOURNAMENTS) {
+    const result = STATE.results?.[t.id];
+    if (!result?.positions) continue;
+    const p1Pos = Object.entries(result.positions).find(([,pid]) => pid === p1id)?.[0];
+    const p2Pos = Object.entries(result.positions).find(([,pid]) => pid === p2id)?.[0];
+    if (!p1Pos || !p2Pos) continue;
+    const p1n = parseInt(p1Pos), p2n = parseInt(p2Pos);
+    const winner = p1n < p2n ? 'p1' : p2n < p1n ? 'p2' : 'draw';
+    if (winner === 'p1') p1Wins++;
+    else if (winner === 'p2') p2Wins++;
+    const posStr = pos => pos === 1 ? '🥇 1st' : pos === 2 ? '🥈 2nd' : pos === 3 ? '🥉 3rd' : `${pos}th`;
+    rows.push(`<tr>
+      <td style="font-size:12px;color:var(--text-secondary);">${t.roman} ${t.icon}</td>
+      <td style="color:${winner==='p1'?'var(--gold)':'var(--text-primary)'};font-weight:${winner==='p1'?'700':'400'};">${posStr(p1n)}</td>
+      <td style="text-align:center;color:var(--text-secondary);">vs</td>
+      <td style="color:${winner==='p2'?'var(--gold)':'var(--text-primary)'};font-weight:${winner==='p2'?'700':'400'};">${posStr(p2n)}</td>
+    </tr>`);
+  }
+  const p1Total = computeTotalPoints(p1id), p2Total = computeTotalPoints(p2id);
+  out.innerHTML = `
+    <div style="display:grid;grid-template-columns:1fr auto 1fr;gap:8px;margin-bottom:24px;text-align:center;align-items:center;">
+      <div>
+        <div style="font-size:20px;font-weight:700;color:var(--gold);">${esc(p1.name)}</div>
+        <div style="font-size:13px;color:var(--text-secondary);">${p1.team || 'Free Agent'}</div>
+        <div style="font-size:28px;font-weight:900;color:${p1Total>p2Total?'var(--gold)':'var(--text-primary)'};margin-top:8px;">${p1Total}</div>
+        <div style="font-size:11px;color:var(--text-secondary);">Total Pts</div>
+      </div>
+      <div style="font-size:24px;color:var(--text-secondary);">⚔️</div>
+      <div>
+        <div style="font-size:20px;font-weight:700;color:var(--gold);">${esc(p2.name)}</div>
+        <div style="font-size:13px;color:var(--text-secondary);">${p2.team || 'Free Agent'}</div>
+        <div style="font-size:28px;font-weight:900;color:${p2Total>p1Total?'var(--gold)':'var(--text-primary)'};margin-top:8px;">${p2Total}</div>
+        <div style="font-size:11px;color:var(--text-secondary);">Total Pts</div>
+      </div>
+    </div>
+    <div style="display:flex;gap:40px;justify-content:center;margin-bottom:20px;">
+      <div style="text-align:center;">
+        <div style="font-size:32px;font-weight:900;color:${p1Wins>p2Wins?'var(--gold)':'var(--text-primary)'}">${p1Wins}</div>
+        <div style="font-size:11px;color:var(--text-secondary);">Head Finishes</div>
+      </div>
+      <div style="font-size:24px;color:var(--text-secondary);display:flex;align-items:center;">–</div>
+      <div style="text-align:center;">
+        <div style="font-size:32px;font-weight:900;color:${p2Wins>p1Wins?'var(--gold)':'var(--text-primary)'}">${p2Wins}</div>
+        <div style="font-size:11px;color:var(--text-secondary);">Head Finishes</div>
+      </div>
+    </div>
+    ${rows.length ? `<table style="width:100%;border-collapse:collapse;font-size:13px;">
+      <thead><tr>
+        <th style="text-align:left;padding:8px;color:var(--text-secondary);font-size:11px;text-transform:uppercase;border-bottom:1px solid rgba(255,255,255,0.06);">Tournament</th>
+        <th style="padding:8px;color:var(--gold);font-size:11px;">${esc(p1.name)}</th>
+        <th style="padding:8px;"></th>
+        <th style="padding:8px;color:var(--gold);font-size:11px;">${esc(p2.name)}</th>
+      </tr></thead>
+      <tbody>${rows.join('')}</tbody>
+    </table>` : '<div class="empty-state"><div class="empty-icon">📋</div><div class="empty-title">No shared tournament data</div></div>'}
+  `;
+}
+
 function renderPlayers() {
   const players = getPlayersArray();
   const search = document.getElementById('player-search')?.value?.toLowerCase() || '';
   const filtered = players.filter(p => p.name.toLowerCase().includes(search));
   const grid = document.getElementById('player-grid');
   const countEl = document.getElementById('player-count-label');
-  countEl.textContent = `${players.length} / 36 players`;
+  countEl.textContent = `${players.length} / 64 players`;
 
   if (!filtered.length) {
-    grid.innerHTML = `<div class="empty-state" style="grid-column:1/-1;"><div class="empty-icon">👤</div><div class="empty-title">No players found</div><div class="empty-desc">${players.length ? 'Try a different search' : 'Click "Add Player" to register participants'}</div></div>`;
+    grid.innerHTML = `<div class="empty-state" style="grid-column:1/-1;"><div class="empty-icon">👤</div><div class="empty-title">No players found</div><div class="empty-desc">${players.length ? 'Try a different search' : 'Click "Add Player" to register your participants'}</div></div>`;
     return;
   }
   grid.innerHTML = filtered.map(p => {
@@ -869,13 +1096,13 @@ function renderPlayers() {
     return `
       <div class="player-chip" id="chip-${p.id}">
         <div class="player-avatar">${avatarInner}</div>
-        <div style="flex:1;">
+        <div style="flex:1;cursor:pointer;" onclick="openPlayerProfile('${p.id}')">
           <div class="player-chip-name">${esc(p.name)}</div>
           <div style="font-size:11px;color:var(--text-secondary);margin-top:2px;">
             ${typeLabel} · ${esc(teamLabel)}
           </div>
         </div>
-        ${AUTH.role === 'admin' ? `<button class="player-delete admin-only" onclick="removePlayer('${p.id}')" title="Remove">✕</button>` : ''}
+        ${AUTH.role === 'admin' ? `<button class="player-delete admin-only" onclick="event.stopPropagation();removePlayer('${p.id}')" title="Remove">✕</button>` : ''}
       </div>
     `;
   }).join('');
@@ -1019,7 +1246,7 @@ function renderTournamentDashboard(tid) {
   // Replace standings table with results list + full stats
   const tbody = document.getElementById('td-standings-body');
   if (!result?.positions) {
-    tbody.innerHTML = `<tr><td colspan="11" class="empty-state" style="padding:40px 0;">
+    tbody.innerHTML = `<tr><td colspan="10" class="empty-state" style="padding:40px 0;">
       <div class="empty-icon">🏆</div>
       <div class="empty-title">No final result saved yet</div>
       <div class="empty-desc">Admins: use "Enter Results" in the tournament card.</div>
@@ -1055,9 +1282,35 @@ function renderTournamentDashboard(tid) {
         <td>${isUnknown ? '—' : p.gf}</td>
         <td>${isUnknown ? '—' : p.ga}</td>
         <td style="color:${p.gd > 0 ? '#4caf50' : p.gd < 0 ? '#f44336' : 'inherit'}">${isUnknown ? '—' : p.gd > 0 ? '+'+p.gd : p.gd}</td>
-        <td class="points-cell">${p.pts}</td>
       </tr>`;
     }).join('');
+  }
+
+  // Tournament Summary Card
+  const summaryEl = document.getElementById('td-summary-card');
+  if (summaryEl) {
+    if (result?.positions && standings.length > 0) {
+      const top3 = standings.slice(0, 3);
+      const statsFor = (pid) => {
+        const s = STATE.tournamentStats?.[tid]?.[pid];
+        return s ? `<span style="font-size:11px;color:var(--text-secondary);margin-top:4px;display:block;">MP ${s.matchesPlayed} &nbsp; W ${s.wins} &nbsp; L ${s.losses} &nbsp; GD ${s.goalDifference > 0 ? '+'+s.goalDifference : s.goalDifference}</span>` : '';
+      };
+      const medals = ['🥇','🥈','🥉'];
+      summaryEl.innerHTML = `<div class="card" style="margin-bottom:24px;background:linear-gradient(135deg,rgba(226,192,68,0.06),rgba(30,82,48,0.3));border-color:rgba(226,192,68,0.2);">
+        <div class="card-title" style="color:var(--gold);">🏆 Tournament Results</div>
+        <div style="display:flex;gap:16px;flex-wrap:wrap;">
+          ${top3.map((pl, i) => `
+          <div style="flex:1;min-width:120px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:12px;padding:14px;text-align:center;">
+            <div style="font-size:24px;">${medals[i]}</div>
+            <div style="font-size:14px;font-weight:600;color:var(--text-primary);margin-top:6px;">${esc(STATE.players[pl.id]?.name || pl.name)}</div>
+            <div style="font-size:11px;color:var(--text-secondary);">${esc(STATE.players[pl.id]?.team || '')}</div>
+            ${statsFor(pl.id)}
+          </div>`).join('')}
+        </div>
+      </div>`;
+    } else {
+      summaryEl.innerHTML = '';
+    }
   }
 
   // Hide internal match UI and show external link
@@ -1562,25 +1815,27 @@ function openTournamentModal(tid) {
         <thead>
           <tr>
             <th style="text-align:left;">Player</th>
-            <th>MP</th><th>W</th><th>D</th><th>L</th><th>GF</th><th>GA</th><th>GD</th><th>Pts</th>
+            <th style="text-align:left;">Team</th>
+            <th>MP</th><th>W</th><th>D</th><th>L</th><th>GF</th><th>GA</th><th>GD</th>
           </tr>
         </thead>
         <tbody>
           ${participants.map(pid => {
-            const p = STATE.players[pid];
-            if (!p) return '';
-            const s = STATE.tournamentStats[tid]?.[pid] || { matchesPlayed:0, wins:0, draws:0, losses:0, goalsFor:0, goalsAgainst:0, goalDifference:0, points:0 };
-            return `<tr>
-              <td style="text-align:left; white-space:nowrap; font-size:12px;">${esc(p.name)}</td>
-              <td><input type="number" class="form-input ts-in" style="padding:4px; font-size:12px;" id="ts-mp-${pid}" value="${s.matchesPlayed}" min="0"/></td>
-              <td><input type="number" class="form-input ts-in" style="padding:4px; font-size:12px;" id="ts-w-${pid}" value="${s.wins}" min="0"/></td>
-              <td><input type="number" class="form-input ts-in" style="padding:4px; font-size:12px;" id="ts-d-${pid}" value="${s.draws}" min="0"/></td>
-              <td><input type="number" class="form-input ts-in" style="padding:4px; font-size:12px;" id="ts-l-${pid}" value="${s.losses}" min="0"/></td>
-              <td><input type="number" class="form-input ts-in" style="padding:4px; font-size:12px;" id="ts-gf-${pid}" value="${s.goalsFor}" min="0"/></td>
-              <td><input type="number" class="form-input ts-in" style="padding:4px; font-size:12px;" id="ts-ga-${pid}" value="${s.goalsAgainst}" min="0"/></td>
-              <td><input type="number" class="form-input ts-in" style="padding:4px; font-size:12px;" id="ts-gd-${pid}" value="${s.goalDifference}"/></td>
-              <td><input type="number" class="form-input ts-in" style="padding:4px; font-size:12px;" id="ts-pts-${pid}" value="${s.points}" min="0"/></td>
-            </tr>`;
+             const p = STATE.players[pid];
+             if (!p) return '';
+             const s = STATE.tournamentStats[tid]?.[pid] || { matchesPlayed:0, wins:0, draws:0, losses:0, goalsFor:0, goalsAgainst:0, goalDifference:0 };
+             const currentTeam = STATE.results?.[tid]?.teams?.[pid] || p.team || '';
+             return `<tr>
+               <td style="text-align:left; white-space:nowrap; font-size:12px;">${esc(p.name)}</td>
+               <td><input type="text" class="form-input" style="padding:4px; font-size:12px; min-width:80px;" id="ts-team-${pid}" value="${esc(currentTeam)}" placeholder="Team Name"/></td>
+               <td><input type="number" class="form-input ts-in" style="padding:4px; font-size:12px;" id="ts-mp-${pid}" value="${s.matchesPlayed}" min="0"/></td>
+               <td><input type="number" class="form-input ts-in" style="padding:4px; font-size:12px;" id="ts-w-${pid}" value="${s.wins}" min="0"/></td>
+               <td><input type="number" class="form-input ts-in" style="padding:4px; font-size:12px;" id="ts-d-${pid}" value="${s.draws}" min="0"/></td>
+               <td><input type="number" class="form-input ts-in" style="padding:4px; font-size:12px;" id="ts-l-${pid}" value="${s.losses}" min="0"/></td>
+               <td><input type="number" class="form-input ts-in" style="padding:4px; font-size:12px;" id="ts-gf-${pid}" value="${s.goalsFor}" min="0"/></td>
+               <td><input type="number" class="form-input ts-in" style="padding:4px; font-size:12px;" id="ts-ga-${pid}" value="${s.goalsAgainst}" min="0"/></td>
+               <td><input type="number" class="form-input ts-in" style="padding:4px; font-size:12px;" id="ts-gd-${pid}" value="${s.goalDifference}"/></td>
+             </tr>`;
           }).join('')}
         </tbody>
       </table>
@@ -1693,12 +1948,17 @@ function saveTournamentResult(tid, slots, hasBABD) {
   STATE.results[tid] = result;
   saveToFirebase('ballandor/results', STATE.results);
 
-  // Read and save player stats
+  // Read and save player stats & team overrides
   const participants = Object.keys(STATE.tournamentStats?.[tid] || {});
   if (participants.length > 0) {
     if (!STATE.tournamentStats) STATE.tournamentStats = {};
     if (!STATE.tournamentStats[tid]) STATE.tournamentStats[tid] = {};
+    
+    // Extract team overrides
+    if (!STATE.results[tid].teams) STATE.results[tid].teams = {};
+    
     participants.forEach(pid => {
+      // Save stats
       STATE.tournamentStats[tid][pid] = {
         matchesPlayed: parseInt(document.getElementById(`ts-mp-${pid}`)?.value || 0),
         wins: parseInt(document.getElementById(`ts-w-${pid}`)?.value || 0),
@@ -1709,7 +1969,16 @@ function saveTournamentResult(tid, slots, hasBABD) {
         goalDifference: parseInt(document.getElementById(`ts-gd-${pid}`)?.value || 0),
         points: parseInt(document.getElementById(`ts-pts-${pid}`)?.value || 0)
       };
+      
+      // Save team override if provided
+      const teamInput = document.getElementById(`ts-team-${pid}`)?.value?.trim();
+      if (teamInput) {
+        STATE.results[tid].teams[pid] = teamInput;
+      }
     });
+    
+    // Save updated results (now containing teams) and stats to DB
+    saveToFirebase('ballandor/results', STATE.results);
     saveToFirebase(`ballandor/tournamentStats/${tid}`, STATE.tournamentStats[tid]);
   }
 
@@ -3359,3 +3628,50 @@ document.getElementById('btn-gs-generate-ko')?.addEventListener('click', async (
   if (!CURRENT_BRACKET_TID) return;
   await generateKnockoutFromGroups(CURRENT_BRACKET_TID);
 });
+
+// ─── MOBILE HAMBURGER MENU ────────────────────────────────────────────
+(function initMobileNav() {
+  const hamburger = document.getElementById('hamburger-btn');
+  const nav = document.getElementById('main-nav');
+  if (!hamburger || !nav) return;
+
+  hamburger.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const isOpen = nav.classList.toggle('open');
+    hamburger.classList.toggle('open', isOpen);
+    hamburger.setAttribute('aria-expanded', isOpen);
+  });
+
+  // Close on nav-btn click
+  nav.querySelectorAll('.nav-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      nav.classList.remove('open');
+      hamburger.classList.remove('open');
+      hamburger.setAttribute('aria-expanded', 'false');
+    });
+  });
+
+  // Close on outside click
+  document.addEventListener('click', (e) => {
+    if (!nav.contains(e.target) && !hamburger.contains(e.target)) {
+      nav.classList.remove('open');
+      hamburger.classList.remove('open');
+      hamburger.setAttribute('aria-expanded', 'false');
+    }
+  });
+})();
+
+// ─── LEADERBOARD ROW → PLAYER PROFILE ────────────────────────────────
+document.body.addEventListener('click', (e) => {
+  const row = e.target.closest('#leaderboard-body tr');
+  if (row) {
+    // Find player id from next element data or derive from rank
+    const nameCell = row.querySelector('.player-name-cell');
+    if (nameCell) {
+      const name = nameCell.textContent.trim();
+      const player = getPlayersArray().find(p => p.name === name);
+      if (player) openPlayerProfile(player.id);
+    }
+  }
+});
+

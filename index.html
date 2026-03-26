@@ -209,17 +209,17 @@
 
 <main>
 
-  <!-- ═══════════════ DASHBOARD PAGE ═══════════════ -->
   <div class="page active" id="page-dashboard">
     <div class="section-header">
       <div class="section-title"><span>📊</span> Season Dashboard</div>
-      <span id="season-label" style="font-size:13px;color:var(--text-secondary);"></span>
+      <button class="btn btn-secondary btn-sm" onclick="openH2H()" title="Compare two players head-to-head">⚔️ H2H</button>
     </div>
+    <div style="font-size:13px;color:var(--text-secondary);text-align:right;margin-bottom:12px;" id="season-label"></div>
 
     <div class="dashboard-grid" id="stat-grid">
       <div class="stat-card"><div class="stat-icon">👥</div><div class="stat-value" id="stat-players">0</div><div class="stat-label">Players Registered</div></div>
       <div class="stat-card"><div class="stat-icon">🏆</div><div class="stat-value" id="stat-tournaments">0/9</div><div class="stat-label">Tournaments Completed</div></div>
-      <div class="stat-card"><div class="stat-icon">⭐</div><div class="stat-value" id="stat-leader">—</div><div class="stat-label">Current Leader</div></div>
+      <div class="stat-card leader-card"><div class="stat-icon">⭐</div><div class="stat-value" id="stat-leader">—</div><div class="stat-label">Current Leader</div></div>
       <div class="stat-card"><div class="stat-icon">🎯</div><div class="stat-value" id="stat-top-pts">0</div><div class="stat-label">Leader Points</div></div>
     </div>
 
@@ -279,7 +279,7 @@
       <div class="form-group">
         <label class="form-label">Enter players (format: Name - Team - Type - LogoURL)</label>
         <textarea class="form-input" id="bulk-textarea" rows="6" placeholder="Player 1 - Real Madrid - club - https://logo...&#10;Player 2 - Barcelona - club&#10;Player 3 - Man City&#10;…"></textarea>
-        <div class="form-hint">Enter one player per line. Default type is club. Max 36 players.</div>
+        <div class="form-hint">Enter one player per line. Default type is club. Max 64 players.</div>
       </div>
       <button class="btn btn-primary" id="bulk-add-btn">➕ Add All</button>
     </div>
@@ -332,6 +332,9 @@
 
     <div style="display:grid;grid-template-columns:1fr 340px;gap:24px;align-items:start;margin-top:24px;" class="td-layout-grid">
       
+      <!-- Tournament Summary Card (injected by JS) -->
+      <div id="td-summary-card"></div>
+
       <!-- Standings Table -->
       <div class="card" style="overflow-x: auto;">
         <div class="card-title">📊 Tournament Standings</div>
@@ -349,11 +352,10 @@
                 <th title="Goals For">GF</th>
                 <th title="Goals Against">GA</th>
                 <th title="Goal Difference">GD</th>
-                <th title="Points">PTS</th>
               </tr>
             </thead>
             <tbody id="td-standings-body">
-              <tr><td colspan="11" class="empty-state" style="padding:40px 0;"><div class="empty-icon">📊</div><div class="empty-title">No participants or matches yet</div></td></tr>
+              <tr><td colspan="10" class="empty-state" style="padding:40px 0;"><div class="empty-icon">📊</div><div class="empty-title">No participants or matches yet</div></td></tr>
             </tbody>
           </table>
         </div>
@@ -755,6 +757,45 @@
         <button class="btn btn-primary admin-only" style="flex:1;" onclick="applyEditMatch()">💾 Save Changes</button>
         <button class="btn btn-secondary" data-close="edit-match-modal">Cancel</button>
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ PLAYER PROFILE MODAL ═══ -->
+<div class="modal-overlay" id="player-profile-modal">
+  <div class="modal" style="max-width:560px;">
+    <div class="modal-header">
+      <div class="modal-title">👤 Player Profile</div>
+      <button class="modal-close" data-close="player-profile-modal">✕</button>
+    </div>
+    <div class="modal-body" id="player-profile-body">
+      <!-- Filled by JS -->
+    </div>
+  </div>
+</div>
+
+<!-- ═══ HEAD-TO-HEAD MODAL ═══ -->
+<div class="modal-overlay" id="h2h-modal">
+  <div class="modal" style="max-width:600px;">
+    <div class="modal-header">
+      <div class="modal-title">⚔️ Head-to-Head</div>
+      <button class="modal-close" data-close="h2h-modal">✕</button>
+    </div>
+    <div class="modal-body">
+      <div style="display:flex;gap:12px;margin-bottom:20px;flex-wrap:wrap;">
+        <div style="flex:1;min-width:140px;">
+          <label class="form-label">Player 1</label>
+          <select class="form-select" id="h2h-p1"></select>
+        </div>
+        <div style="flex:1;min-width:140px;">
+          <label class="form-label">Player 2</label>
+          <select class="form-select" id="h2h-p2"></select>
+        </div>
+        <div style="display:flex;align-items:flex-end;">
+          <button class="btn btn-primary btn-sm" onclick="renderH2H()">⚔️ Compare</button>
+        </div>
+      </div>
+      <div id="h2h-result"></div>
     </div>
   </div>
 </div>

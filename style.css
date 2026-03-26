@@ -1,32 +1,32 @@
 @import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700;900&family=Inter:wght@300;400;500;600;700&display=swap');
 
 :root {
-  /* Apple-level Minimal Dark & Gold Palette */
-  --bg-primary: #000000;
-  --bg-secondary: #0a0a0c;
-  --bg-card: rgba(20, 20, 22, 0.65);
-  --bg-glass: rgba(15, 15, 18, 0.75);
-  --gold: #d4af37;
-  --gold-light: #f3e5ab;
-  --gold-dark: #aa8822;
-  --green-primary: #121212; /* Neutralized green to maintain clean architecture */
-  --green-accent: #222222;
-  --green-bright: #333333;
+  /* Vibrant Emerald & Soft Gold Theme */
+  --bg-primary: #0a1f14;
+  --bg-secondary: #0f2c1c;
+  --bg-card: rgba(20, 50, 30, 0.5);
+  --bg-glass: rgba(15, 38, 22, 0.65);
+  --gold: #e2c044;
+  --gold-light: #f4d068;
+  --gold-dark: #b89830;
+  --green-primary: #12351f; 
+  --green-accent: #1e5230;
+  --green-bright: #2d7a46;
   --silver: #e0e0e0;
   --bronze: #cd7f32;
-  --text-primary: #f5f5f7;
-  --text-secondary: #86868b;
-  --text-gold: #d4af37;
-  --border-glass: rgba(255, 255, 255, 0.08);
-  --border-green: rgba(255, 255, 255, 0.1);
-  --shadow-gold: 0 4px 24px rgba(0,0,0,0.6);
-  --shadow-green: 0 4px 24px rgba(0,0,0,0.6);
-  --gradient-hero: linear-gradient(180deg, rgba(255,255,255,0.02) 0%, rgba(0,0,0,0) 100%);
-  --gradient-gold: linear-gradient(135deg, #d4af37 0%, #f3e5ab 50%, #aa8822 100%);
-  --gradient-card: linear-gradient(180deg, rgba(30,30,32,0.4) 0%, rgba(15,15,18,0.8) 100%);
+  --text-primary: #f5fdf8;
+  --text-secondary: #a3c4b1;
+  --text-gold: #f4d068;
+  --border-glass: rgba(255, 255, 255, 0.12);
+  --border-green: rgba(45, 122, 70, 0.4);
+  --shadow-gold: 0 4px 20px rgba(226, 192, 68, 0.2);
+  --shadow-green: 0 4px 24px rgba(0, 0, 0, 0.4);
+  --gradient-hero: linear-gradient(180deg, rgba(255,255,255,0.03) 0%, rgba(0,0,0,0) 100%);
+  --gradient-gold: linear-gradient(135deg, #e2c044 0%, #f4d068 50%, #b89830 100%);
+  --gradient-card: linear-gradient(180deg, rgba(30, 70, 45, 0.4) 0%, rgba(15, 38, 22, 0.8) 100%);
   --radius: 20px;
   --radius-sm: 12px;
-  --transition: all 0.3s cubic-bezier(0.25, 0.1, 0.25, 1);
+  --transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
 }
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -39,8 +39,11 @@ body {
   color: var(--text-primary);
   min-height: 100vh;
   overflow-x: hidden;
-  /* Very subtle glow, removed noisy green pattern */
-  background-image: radial-gradient(ellipse at 50% -20%, rgba(212,175,55,0.08) 0%, transparent 60%);
+  /* Soft vibrant glow for emerald feel */
+  background-image: 
+    radial-gradient(ellipse at 20% -20%, rgba(226, 192, 68, 0.15) 0%, transparent 60%),
+    radial-gradient(ellipse at 80% 120%, rgba(45, 122, 70, 0.2) 0%, transparent 60%);
+  background-attachment: fixed;
 }
 
 /* ─── SCROLLBAR ─── */
@@ -152,13 +155,13 @@ main { max-width: 1400px; margin: 0 auto; padding: 24px; }
   padding: 28px;
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
-  transition: var(--transition);
+  transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
   position: relative;
   overflow: hidden;
   box-shadow: 0 8px 32px rgba(0,0,0,0.2);
 }
 .card::before { content: none; }
-.card:hover { border-color: rgba(255,255,255,0.15); box-shadow: 0 12px 40px rgba(0,0,0,0.3); }
+.card:hover { border-color: rgba(226,192,68,0.2); box-shadow: 0 12px 40px rgba(0,0,0,0.3); transform: translateY(-3px); }
 .card-title {
   font-family: 'Inter', sans-serif; font-size: 15px; font-weight: 500;
   color: var(--text-secondary); letter-spacing: 0.5px;
@@ -245,11 +248,11 @@ main { max-width: 1400px; margin: 0 auto; padding: 24px; }
 .tournaments-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 24px; }
 .tournament-card {
   background: var(--bg-card); border: 1px solid var(--border-glass);
-  border-radius: var(--radius); overflow: hidden; transition: var(--transition);
+  border-radius: var(--radius); overflow: hidden; transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
   cursor: pointer; backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
   box-shadow: 0 4px 20px rgba(0,0,0,0.2);
 }
-.tournament-card:hover { border-color: rgba(212,175,55,0.3); transform: translateY(-4px); box-shadow: var(--shadow-gold); }
+.tournament-card:hover { border-color: rgba(226,192,68,0.3); transform: translateY(-4px); box-shadow: 0 8px 30px rgba(226,192,68,0.25); }
 .tournament-card.locked { opacity: 0.4; cursor: not-allowed; pointer-events: none; filter: grayscale(100%); }
 .tournament-card.locked:hover { transform: none; box-shadow: 0 4px 20px rgba(0,0,0,0.2); border-color: var(--border-glass); }
 .t-header {
@@ -368,23 +371,29 @@ main { max-width: 1400px; margin: 0 auto; padding: 24px; }
 
 /* ─── BUTTONS ─── */
 .btn {
-  padding: 12px 24px; border-radius: var(--radius-sm); border: none;
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  padding: 12px 24px; border-radius: var(--radius-sm);
   font-family: 'Inter', sans-serif; font-size: 14px; font-weight: 600;
-  cursor: pointer; transition: var(--transition); letter-spacing: 0.5px;
-  display: inline-flex; align-items: center; gap: 8px;
+  border: none; cursor: pointer; transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
 }
+.btn:active { transform: scale(0.96); }
 .btn-primary {
-  background: var(--gradient-gold); color: #000;
-  box-shadow: 0 4px 15px rgba(212,175,55,0.3);
+  background: var(--gradient-gold); color: #0a1f14;
+  box-shadow: 0 4px 15px rgba(226,192,68,0.3);
 }
-.btn-primary:hover { transform: translateY(-2px); box-shadow: 0 6px 25px rgba(212,175,55,0.45); }
+.btn-primary:hover {
+  filter: brightness(1.1); box-shadow: 0 6px 20px rgba(226,192,68,0.5); transform: translateY(-2px);
+}
 .btn-secondary {
   background: rgba(255,255,255,0.08); color: var(--text-primary);
   border: 1px solid var(--border-glass);
 }
-.btn-secondary:hover { background: rgba(255,255,255,0.12); }
-.btn-danger { background: rgba(244,67,54,0.15); color: #f44336; border: 1px solid rgba(244,67,54,0.3); }
-.btn-danger:hover { background: rgba(244,67,54,0.25); }
+.btn-secondary:hover { background: rgba(255,255,255,0.12); transform: translateY(-1px); border-color: rgba(255,255,255,0.2); }
+.btn-danger {
+  background: rgba(244, 67, 54, 0.15); color: #ff6b6b;
+  border: 1px solid rgba(244, 67, 54, 0.3);
+}
+.btn-danger:hover { background: rgba(244, 67, 54, 0.25); border-color: rgba(244, 67, 54, 0.5); transform: translateY(-1px); }
 .btn-sm { padding: 8px 16px; font-size: 12px; }
 .btn-icon { width: 36px; height: 36px; padding: 0; justify-content: center; border-radius: 50%; }
 .btn:disabled { opacity: 0.4; cursor: not-allowed; transform: none !important; }
@@ -1093,4 +1102,121 @@ body.role-viewer .t-action-btn[onclick*="openBracketModal"] { display: none !imp
 @media (max-width: 1000px) {
   .td-layout-grid { grid-template-columns: 1fr; }
   .tournament-podium { transform: scale(0.85); transform-origin: bottom center; }
+}
+
+/* ─── MOBILE NAV DROPDOWN ─── */
+.hamburger-btn {
+  display: none;
+  flex-direction: column; gap: 5px; background: none; border: none;
+  cursor: pointer; padding: 8px; border-radius: 8px;
+  transition: background 0.2s;
+}
+.hamburger-btn span {
+  display: block; width: 22px; height: 2px;
+  background: var(--text-primary); border-radius: 2px;
+  transition: all 0.3s ease;
+}
+.hamburger-btn.open span:nth-child(1) { transform: rotate(45deg) translate(5px, 5px); }
+.hamburger-btn.open span:nth-child(2) { opacity: 0; }
+.hamburger-btn.open span:nth-child(3) { transform: rotate(-45deg) translate(5px, -5px); }
+.hamburger-btn:hover { background: rgba(255,255,255,0.08); }
+
+@media (max-width: 768px) {
+  .hamburger-btn { display: flex; }
+  #main-nav {
+    display: none;
+    position: absolute; top: 70px; left: 0; right: 0;
+    background: rgba(10, 31, 20, 0.97);
+    backdrop-filter: blur(24px);
+    border-bottom: 1px solid rgba(226,192,68,0.15);
+    flex-direction: column; gap: 0;
+    padding: 8px 0; z-index: 200;
+    box-shadow: 0 16px 40px rgba(0,0,0,0.5);
+    animation: navSlideDown 0.25s ease forwards;
+  }
+  #main-nav.open { display: flex; }
+  @keyframes navSlideDown {
+    from { opacity: 0; transform: translateY(-8px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  #main-nav .nav-btn {
+    padding: 14px 24px; border-radius: 0;
+    font-size: 15px; text-align: left;
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+  }
+  #main-nav .nav-btn:last-child { border-bottom: none; }
+  .header-actions .firebase-badge { display: none; }
+  .header-actions .btn-sm { padding: 7px 12px; font-size: 12px; }
+  header { position: relative; }
+}
+
+/* ─── LEADER CARD HIGHLIGHT ─── */
+.stat-card.leader-card {
+  border-color: rgba(226,192,68,0.35);
+  background: linear-gradient(135deg, rgba(226,192,68,0.08), rgba(30,82,48,0.4));
+  box-shadow: 0 0 20px rgba(226,192,68,0.1);
+}
+.stat-card.leader-card .stat-value {
+  color: var(--gold);
+  text-shadow: 0 0 12px rgba(226,192,68,0.4);
+}
+
+/* ─── LEADERBOARD ROW HOVER ─── */
+.leaderboard-table tbody tr {
+  transition: background 0.2s ease, transform 0.15s ease;
+  cursor: pointer;
+}
+.leaderboard-table tbody tr:hover {
+  background: rgba(226,192,68,0.06);
+  transform: translateX(4px);
+}
+.leaderboard-table tbody tr:hover td:first-child {
+  color: var(--gold);
+}
+
+/* ─── PLAYER CHIP HOVER (CLICKABLE) ─── */
+.player-chip {
+  transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+}
+.player-chip:hover {
+  transform: translateY(-2px);
+  border-color: rgba(226,192,68,0.25);
+  box-shadow: 0 6px 20px rgba(0,0,0,0.3);
+}
+
+/* ─── ANIMATED STAT COUNTER ─── */
+@keyframes fadeCountIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.stat-value {
+  animation: fadeCountIn 0.5s ease forwards;
+}
+
+/* ─── TOURNAMENT CARD ACTIVE HIGHLIGHT ─── */
+.tournament-card.active-card {
+  border-color: rgba(226,192,68,0.5);
+  box-shadow: 0 0 24px rgba(226,192,68,0.2);
+}
+
+/* ─── H2H TABLE ROWS ─── */
+#h2h-result table tbody tr {
+  transition: background 0.2s;
+}
+#h2h-result table tbody tr:hover {
+  background: rgba(255,255,255,0.04);
+}
+#h2h-result table tbody td {
+  padding: 10px 8px;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+}
+
+/* ─── RESPONSIVE MAIN ─── */
+@media (max-width: 600px) {
+  main { padding: 16px; }
+  .card { padding: 18px; }
+  .dashboard-grid { grid-template-columns: 1fr 1fr; gap: 10px; }
+  .section-header { flex-wrap: wrap; gap: 8px; }
+  .tournaments-grid { grid-template-columns: 1fr; }
+  .player-grid { grid-template-columns: 1fr; }
 }
