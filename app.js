@@ -643,6 +643,25 @@ function getPlayerLogoImg(player, sizeClass = '') {
   return `<img src="${esc(player.logo)}" alt="${esc(alt)}" class="${cls}">`;
 }
 
+function getPlayerTeam(tournamentId, playerId) {
+  const p = STATE.players[playerId];
+  if (!p) return null;
+  const tTeamObj = STATE.results?.[tournamentId]?.teams?.[playerId];
+  if (tTeamObj) {
+    if (typeof tTeamObj === 'object') {
+      return {
+        ...p,
+        team: tTeamObj.teamName || p.team,
+        teamType: tTeamObj.teamType || p.teamType,
+        logo: tTeamObj.logo || p.logo
+      };
+    } else {
+      return { ...p, team: tTeamObj };
+    }
+  }
+  return p;
+}
+
 function renderPlayerNameWithLogo(player) {
   if (!player) return '—';
   const logo = getPlayerLogoImg(player, 'small');
@@ -1135,7 +1154,7 @@ function renderTournaments() {
     const winnerName = winnerId ? (STATE.players[winnerId]?.name || 'Unknown') : null;
     const top2Id = result?.positions?.[2];
     const top3Id = result?.positions?.[3];
-    const topNames = [winnerId, top2Id, top3Id].filter(Boolean).map(pid => STATE.players[pid]).filter(Boolean);
+    const topNames = [winnerId, top2Id, top3Id].filter(Boolean).map(pid => getPlayerTeam(t.id, pid)).filter(Boolean);
     const link = result?.link || '';
     const hasLink = !!link;
 
@@ -1151,7 +1170,7 @@ function renderTournaments() {
       <div class="t-body">
         ${specialTag ? `<div style="margin-bottom:10px;">${specialTag}</div>` : ''}
         <div class="t-points-row">${ptsDisplay}</div>
-        ${winnerName ? `<div class="t-topline">Winner: <strong>${renderPlayerNameWithLogo(STATE.players[winnerId])}</strong></div>` : `<div class="t-topline" style="color:var(--text-secondary);">No result yet</div>`}
+        ${winnerName ? `<div class="t-topline">Winner: <strong>${renderPlayerNameWithLogo(getPlayerTeam(t.id, winnerId))}</strong></div>` : `<div class="t-topline" style="color:var(--text-secondary);">No result yet</div>`}
         ${topNames.length > 1 ? `<div class="t-topline muted">Top: ${topNames.map(p => renderPlayerNameWithLogo(p)).join(' · ')}</div>` : ''}
         <div class="t-actions">
           <button class="t-action-btn" onclick="openTournamentDashboard('${t.id}')" ${!isAvailable?'disabled':''}>
@@ -1228,7 +1247,7 @@ function renderTournamentDashboard(tid) {
   const standings = [];
   if (result?.positions) {
     Object.entries(result.positions).forEach(([pos, pid]) => {
-      const p = STATE.players[pid] || { id: pid, name: 'Unknown', team: '' };
+      const p = getPlayerTeam(tid, pid) || { id: pid, name: 'Unknown', team: '' };
       standings.push({ pos: parseInt(pos, 10), id: pid, name: p.name, team: p.team, mp: 0, w: 0, d: 0, l: 0, gf: 0, ga: 0, gd: 0, pts: 0 });
     });
     standings.sort((a,b) => a.pos - b.pos);
@@ -1268,7 +1287,7 @@ function renderTournamentDashboard(tid) {
     });
 
     tbody.innerHTML = standings.map((p, i) => {
-      const playerObj = STATE.players[p.id];
+      const playerObj = getPlayerTeam(tid, p.id) || STATE.players[p.id];
       const nameCell = renderPlayerNameWithLogo(playerObj);
       const isUnknown = p.mp === 0 && p.w === 0 && p.l === 0;
       return `<tr>
@@ -1302,8 +1321,8 @@ function renderTournamentDashboard(tid) {
           ${top3.map((pl, i) => `
           <div style="flex:1;min-width:120px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:12px;padding:14px;text-align:center;">
             <div style="font-size:24px;">${medals[i]}</div>
-            <div style="font-size:14px;font-weight:600;color:var(--text-primary);margin-top:6px;">${esc(STATE.players[pl.id]?.name || pl.name)}</div>
-            <div style="font-size:11px;color:var(--text-secondary);">${esc(STATE.players[pl.id]?.team || '')}</div>
+            <div style="font-size:14px;font-weight:600;color:var(--text-primary);margin-top:6px;">${esc(getPlayerTeam(tid, pl.id)?.name || pl.name)}</div>
+            <div style="font-size:11px;color:var(--text-secondary);">${esc(getPlayerTeam(tid, pl.id)?.team || '')}</div>
             ${statsFor(pl.id)}
           </div>`).join('')}
         </div>
@@ -1358,7 +1377,7 @@ function renderTournamentStandings(standings) {
 
   tbody.innerHTML = standings.map((p, i) => {
     const rankClass = i===0?'rank-1':i===1?'rank-2':i===2?'rank-3':'rank-other';
-    const playerObj = STATE.players[p.id] || { name: p.name, team: p.team, teamType: 'club', logo: '' };
+    const playerObj = getPlayerTeam(CURRENT_TD_ID, p.id) || { name: p.name, team: p.team, teamType: 'club', logo: '' };
     const nameCell = renderPlayerNameWithLogo(playerObj);
     return `<tr>
       <td><span class="rank-badge ${rankClass}">${i+1}</span></td>
@@ -1405,8 +1424,8 @@ function renderTournamentMatchHistory(tid) {
   allMatches.reverse();
 
   container.innerHTML = allMatches.map(m => {
-    const p1Obj = STATE.players[m.p1] || null;
-    const p2Obj = STATE.players[m.p2] || null;
+    const p1Obj = getPlayerTeam(tid, m.p1) || null;
+    const p2Obj = getPlayerTeam(tid, m.p2) || null;
     const p1Name = p1Obj?.name || 'Unknown';
     const p2Name = p2Obj?.name || 'Unknown';
     const p1Label = renderPlayerNameWithLogo(p1Obj);
@@ -1815,7 +1834,9 @@ function openTournamentModal(tid) {
         <thead>
           <tr>
             <th style="text-align:left;">Player</th>
-            <th style="text-align:left;">Team</th>
+            <th style="text-align:left;">Team Name</th>
+            <th style="text-align:left;">Type</th>
+            <th style="text-align:left;">Logo URL</th>
             <th>MP</th><th>W</th><th>D</th><th>L</th><th>GF</th><th>GA</th><th>GD</th>
           </tr>
         </thead>
@@ -1824,10 +1845,20 @@ function openTournamentModal(tid) {
              const p = STATE.players[pid];
              if (!p) return '';
              const s = STATE.tournamentStats[tid]?.[pid] || { matchesPlayed:0, wins:0, draws:0, losses:0, goalsFor:0, goalsAgainst:0, goalDifference:0 };
-             const currentTeam = STATE.results?.[tid]?.teams?.[pid] || p.team || '';
+             const tTeamObj = STATE.results?.[tid]?.teams?.[pid];
+             const currentTeam = (typeof tTeamObj === 'object' ? tTeamObj.teamName : tTeamObj) || p.team || '';
+             const currentTeamType = (typeof tTeamObj === 'object' ? tTeamObj.teamType : '') || p.teamType || 'club';
+             const currentLogo = (typeof tTeamObj === 'object' ? tTeamObj.logo : '') || p.logo || '';
              return `<tr>
                <td style="text-align:left; white-space:nowrap; font-size:12px;">${esc(p.name)}</td>
                <td><input type="text" class="form-input" style="padding:4px; font-size:12px; min-width:80px;" id="ts-team-${pid}" value="${esc(currentTeam)}" placeholder="Team Name"/></td>
+               <td>
+                 <select class="form-select ts-in" style="padding:4px; font-size:12px;" id="ts-team-type-${pid}">
+                   <option value="club" ${currentTeamType==='club'?'selected':''}>Club</option>
+                   <option value="national" ${currentTeamType==='national'?'selected':''}>National</option>
+                 </select>
+               </td>
+               <td><input type="text" class="form-input" style="padding:4px; font-size:12px; min-width:60px;" id="ts-logo-${pid}" value="${esc(currentLogo)}" placeholder="Logo URL"/></td>
                <td><input type="number" class="form-input ts-in" style="padding:4px; font-size:12px;" id="ts-mp-${pid}" value="${s.matchesPlayed}" min="0"/></td>
                <td><input type="number" class="form-input ts-in" style="padding:4px; font-size:12px;" id="ts-w-${pid}" value="${s.wins}" min="0"/></td>
                <td><input type="number" class="form-input ts-in" style="padding:4px; font-size:12px;" id="ts-d-${pid}" value="${s.draws}" min="0"/></td>
@@ -1971,9 +2002,18 @@ function saveTournamentResult(tid, slots, hasBABD) {
       };
       
       // Save team override if provided
-      const teamInput = document.getElementById(`ts-team-${pid}`)?.value?.trim();
-      if (teamInput) {
-        STATE.results[tid].teams[pid] = teamInput;
+      const teamInput = document.getElementById(`ts-team-${pid}`)?.value?.trim() || '';
+      const typeInput = document.getElementById(`ts-team-type-${pid}`)?.value || 'club';
+      const logoInput = document.getElementById(`ts-logo-${pid}`)?.value?.trim() || '';
+      
+      if (teamInput || logoInput) {
+        STATE.results[tid].teams[pid] = {
+          teamName: teamInput,
+          teamType: typeInput,
+          logo: logoInput
+        };
+      } else {
+        delete STATE.results[tid].teams[pid];
       }
     });
     
@@ -3361,8 +3401,8 @@ function renderBracketData(tournamentId) {
         </div>
         <div style="display:flex;flex-direction:column;gap:8px;">` +
         groupList.map(m => {
-          const p1 = STATE.players[m.p1];
-          const p2 = STATE.players[m.p2];
+          const p1 = m.p1 ? getPlayerTeam(tournamentId, m.p1) : null;
+          const p2 = m.p2 ? getPlayerTeam(tournamentId, m.p2) : null;
           const s1 = m.score1 !== null ? m.score1 : '';
           const s2 = m.score2 !== null ? m.score2 : '';
           return `<div class="bracket-match" style="padding:10px 12px;">
@@ -3413,10 +3453,12 @@ function renderBracketData(tournamentId) {
       <h4 style="text-align:center; color:var(--gold); font-family:'Cinzel',serif; border-bottom:1px solid rgba(255,255,255,0.1); padding-bottom:10px; margin-bottom:10px;">Round ${r+1}</h4>`;
       
     matchArray.forEach(m => {
-      const p1name = m.p1 ? STATE.players[m.p1]?.name : 'TBD';
-      const p2name = m.p2 ? STATE.players[m.p2]?.name : 'TBD';
-      const p1team = m.p1 ? STATE.players[m.p1]?.team : '';
-      const p2team = m.p2 ? STATE.players[m.p2]?.team : '';
+      const p1Obj = m.p1 ? getPlayerTeam(tournamentId, m.p1) : null;
+      const p2Obj = m.p2 ? getPlayerTeam(tournamentId, m.p2) : null;
+      const p1name = p1Obj?.name || 'TBD';
+      const p2name = p2Obj?.name || 'TBD';
+      const p1team = p1Obj?.team || '';
+      const p2team = p2Obj?.team || '';
       
       const s1 = m.score1 !== null ? m.score1 : '';
       const s2 = m.score2 !== null ? m.score2 : '';
@@ -3463,8 +3505,10 @@ function renderBracketData(tournamentId) {
   // 3rd place column
   if (matches['3rd_place']) {
     const thirdMatch = matches['3rd_place']['m_3rd_0'];
-    const p1name = thirdMatch.p1 ? STATE.players[thirdMatch.p1]?.name : 'TBD';
-    const p2name = thirdMatch.p2 ? STATE.players[thirdMatch.p2]?.name : 'TBD';
+    const p1Obj = thirdMatch.p1 ? getPlayerTeam(tournamentId, thirdMatch.p1) : null;
+    const p2Obj = thirdMatch.p2 ? getPlayerTeam(tournamentId, thirdMatch.p2) : null;
+    const p1name = p1Obj?.name || 'TBD';
+    const p2name = p2Obj?.name || 'TBD';
     const s1 = thirdMatch.score1 !== null ? thirdMatch.score1 : '';
     const s2 = thirdMatch.score2 !== null ? thirdMatch.score2 : '';
     const p1WinnerClass = thirdMatch.winner === thirdMatch.p1 ? 'color:#6fcf6f; font-weight:bold;' : (thirdMatch.winner?'opacity:0.5;':'');
